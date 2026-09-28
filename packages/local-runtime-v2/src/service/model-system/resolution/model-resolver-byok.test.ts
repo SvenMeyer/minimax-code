@@ -416,6 +416,47 @@ describe('custom BYOK compat overrides', () => {
     ).toBeUndefined();
   });
 
+  it('strips unknown nested routing keys from structured objects', () => {
+    expect(
+      planWithCompat(
+        '{"compat":{"openRouterRouting":{"max_price":{"prompt":"0.000002","surge":1},"preferred_min_throughput":{"p50":100,"p95":200}}}}',
+      ),
+    ).toEqual({
+      openRouterRouting: {
+        max_price: { prompt: '0.000002' },
+        preferred_min_throughput: { p50: 100 },
+      },
+    });
+  });
+
+  it('keeps only known price keys when every known key is valid', () => {
+    expect(
+      planWithCompat(
+        '{"compat":{"openRouterRouting":{"max_price":{"prompt":1,"completion":2,"image":3,"audio":4,"request":5,"bogus":6}}}}',
+      ),
+    ).toEqual({
+      openRouterRouting: {
+        max_price: { prompt: 1, completion: 2, image: 3, audio: 4, request: 5 },
+      },
+    });
+  });
+
+  it('keeps only known percentile keys', () => {
+    expect(
+      planWithCompat(
+        '{"compat":{"openRouterRouting":{"preferred_max_latency":{"p50":1,"p75":2,"p90":3,"p99":4,"p100":5}}}}',
+      ),
+    ).toEqual({
+      openRouterRouting: { preferred_max_latency: { p50: 1, p75: 2, p90: 3, p99: 4 } },
+    });
+  });
+
+  it('drops a record whose only keys are unknown', () => {
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"max_price":{"surge":1}}}}'),
+    ).toBeUndefined();
+  });
+
   it('keeps a sort object whose present members all validate', () => {
     expect(
       planWithCompat('{"compat":{"openRouterRouting":{"sort":{"by":"price","partition":null}}}}'),
