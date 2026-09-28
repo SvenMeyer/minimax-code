@@ -388,6 +388,28 @@ describe('custom BYOK compat overrides', () => {
     ).toEqual({ openRouterRouting: { zdr: true } });
   });
 
+  it('rejects a provider list padded with an empty entry', () => {
+    // An empty slug can never match a provider, so it is as invalid as a
+    // non-string. readStrategy rejects the empty string in the scalar case, so
+    // the list must not be laxer.
+    expect(planWithCompat('{"compat":{"openRouterRouting":{"only":[""]}}}')).toBeUndefined();
+    expect(planWithCompat('{"compat":{"openRouterRouting":{"only":["   "]}}}')).toBeUndefined();
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"order":["DeepInfra",""],"zdr":true}}}'),
+    ).toEqual({ openRouterRouting: { zdr: true } });
+  });
+
+  it('trims incidental whitespace from a strategy string', () => {
+    // A padded value cannot match anything OpenRouter knows; forwarding it
+    // verbatim would fail, and dropping the key would discard routing silently.
+    expect(planWithCompat('{"compat":{"openRouterRouting":{"sort":" latency "}}}')).toEqual({
+      openRouterRouting: { sort: 'latency' },
+    });
+    expect(planWithCompat('{"compat":{"openRouterRouting":{"sort":{"by":"  price "}}}}')).toEqual({
+      openRouterRouting: { sort: { by: 'price' } },
+    });
+  });
+
   it('rejects an empty provider list', () => {
     expect(planWithCompat('{"compat":{"openRouterRouting":{"only":[]}}}')).toBeUndefined();
   });
