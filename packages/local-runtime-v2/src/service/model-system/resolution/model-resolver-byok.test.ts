@@ -308,4 +308,84 @@ describe('custom BYOK compat overrides', () => {
       planWithCompat('{"compat":{"__proto__":{"supportsDeveloperRole":false}}}'),
     ).toBeUndefined();
   });
+
+  it('keeps a pinned OpenRouter provider and disables fallbacks', () => {
+    expect(
+      planWithCompat(
+        '{"compat":{"openRouterRouting":{"only":["DeepSeek"],"allow_fallbacks":false}}}',
+      ),
+    ).toEqual({ openRouterRouting: { only: ['DeepSeek'], allow_fallbacks: false } });
+  });
+
+  it('keeps an ordered OpenRouter provider preference list', () => {
+    expect(
+      planWithCompat(
+        '{"compat":{"openRouterRouting":{"order":["DeepInfra","Fireworks"],"ignore":["Morph"]}}}',
+      ),
+    ).toEqual({ openRouterRouting: { order: ['DeepInfra', 'Fireworks'], ignore: ['Morph'] } });
+  });
+
+  it('keeps a bare sort strategy and a sort object', () => {
+    expect(planWithCompat('{"compat":{"openRouterRouting":{"sort":"throughput"}}}')).toEqual({
+      openRouterRouting: { sort: 'throughput' },
+    });
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"sort":{"by":"price","partition":"none"}}}}'),
+    ).toEqual({ openRouterRouting: { sort: { by: 'price', partition: 'none' } } });
+  });
+
+  it('keeps privacy and cost routing keys', () => {
+    expect(
+      planWithCompat(
+        '{"compat":{"openRouterRouting":{"zdr":true,"data_collection":"deny","max_price":{"prompt":"0.000002","completion":1}}}}',
+      ),
+    ).toEqual({
+      openRouterRouting: {
+        zdr: true,
+        data_collection: 'deny',
+        max_price: { prompt: '0.000002', completion: 1 },
+      },
+    });
+  });
+
+  it('keeps throughput and latency preferences in both accepted shapes', () => {
+    expect(
+      planWithCompat(
+        '{"compat":{"openRouterRouting":{"preferred_min_throughput":{"p50":100},"preferred_max_latency":2.5}}}',
+      ),
+    ).toEqual({
+      openRouterRouting: { preferred_min_throughput: { p50: 100 }, preferred_max_latency: 2.5 },
+    });
+  });
+
+  it('drops a routing object when every key is malformed', () => {
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"only":"DeepSeek","zdr":"yes"}}}'),
+    ).toBeUndefined();
+  });
+
+  it('drops a routing key carrying the wrong type but keeps its valid siblings', () => {
+    expect(
+      planWithCompat(
+        '{"compat":{"openRouterRouting":{"only":"DeepSeek","allow_fallbacks":"false","zdr":true}}}',
+      ),
+    ).toEqual({ openRouterRouting: { zdr: true } });
+  });
+
+  it('drops non-record routing values', () => {
+    expect(planWithCompat('{"compat":{"openRouterRouting":[]}}')).toBeUndefined();
+    expect(planWithCompat('{"compat":{"openRouterRouting":"only"}}')).toBeUndefined();
+  });
+
+  it('does not forward unknown routing keys to OpenRouter', () => {
+    expect(
+      planWithCompat(
+        '{"compat":{"openRouterRouting":{"only":["DeepSeek"],"require_attestation":true}}}',
+      ),
+    ).toEqual({ openRouterRouting: { only: ['DeepSeek'] } });
+  });
+
+  it('leaves routing absent so no provider field is sent by default', () => {
+    expect(planWithCompat('{"compat":{"supportsStore":false}}')).toEqual({ supportsStore: false });
+  });
 });
