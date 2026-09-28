@@ -411,14 +411,37 @@ describe('custom BYOK compat overrides', () => {
     ).toEqual({ openRouterRouting: { max_price: { prompt: '0.000002' } } });
   });
 
-  it('drops the whole sort object when a present member is malformed', () => {
+  it('drops the whole sort object when a present member is not a usable strategy', () => {
     // Atomic: {by: "price", partition: 42} must not become {by: "price"}.
     expect(
       planWithCompat('{"compat":{"openRouterRouting":{"sort":{"by":"price","partition":42}}}}'),
     ).toBeUndefined();
+    expect(planWithCompat('{"compat":{"openRouterRouting":{"sort":{"by":42}}}}')).toBeUndefined();
+    expect(planWithCompat('{"compat":{"openRouterRouting":{"sort":{"by":""}}}}')).toBeUndefined();
+    expect(planWithCompat('{"compat":{"openRouterRouting":{"sort":""}}}')).toBeUndefined();
+  });
+
+  it('accepts any non-empty sort strategy, not just the documented examples', () => {
+    // pi types `sort`/`by`/`partition` as plain string and documents
+    // price/throughput/latency as examples, so narrowing to those would drop a
+    // strategy the contract permits and the transport forwards.
+    expect(planWithCompat('{"compat":{"openRouterRouting":{"sort":"custom-strategy"}}}')).toEqual({
+      openRouterRouting: { sort: 'custom-strategy' },
+    });
     expect(
-      planWithCompat('{"compat":{"openRouterRouting":{"sort":{"by":"nope"}}}}'),
+      planWithCompat('{"compat":{"openRouterRouting":{"sort":{"by":"custom-strategy"}}}}'),
+    ).toEqual({ openRouterRouting: { sort: { by: 'custom-strategy' } } });
+  });
+
+  it('drops a price whose exponent form is not finite', () => {
+    // "1e999" matches the numeric string shape but parses to Infinity, the same
+    // non-finite value the numeric branch rejects.
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"max_price":{"prompt":"1e999"}}}}'),
     ).toBeUndefined();
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"max_price":{"prompt":"1e300"}}}}'),
+    ).toEqual({ openRouterRouting: { max_price: { prompt: '1e300' } } });
   });
 
   it('strips unknown nested routing keys from structured objects', () => {
