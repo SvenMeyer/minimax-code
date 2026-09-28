@@ -233,7 +233,7 @@ describe('BYOK config helpers', () => {
 
 describe('custom BYOK compat overrides', () => {
   // Provider config is restored from on-disk JSON, so compat reaches planning untyped.
-  const planWithCompat = (rawConfig: string) =>
+  const planWithCompatAt = (baseURL: string, rawConfig: string) =>
     planCustomProviderResolution({
       provider: 'custom_provider:gateway',
       providerKey: 'gateway',
@@ -242,12 +242,15 @@ describe('custom BYOK compat overrides', () => {
         custom_provider: {
           gateway: {
             api: 'openai-completions',
-            options: { apiKey: 'gateway-key', baseURL: 'https://gateway.example/v1' },
+            options: { apiKey: 'gateway-key', baseURL },
             models: { 'kimi-k2-thinking': JSON.parse(rawConfig) },
           },
         },
       },
     })?.modelCompat;
+  const planWithCompat = (rawConfig: string) =>
+    planWithCompatAt('https://gateway.example/v1', rawConfig);
+  const VERCEL_HOST = 'https://ai-gateway.vercel.sh/v1';
 
   it.each(['null', '"compat"', '7', '[]', '[{"supportsDeveloperRole":false}]'])(
     'ignores non-record compat value %s',
@@ -533,7 +536,8 @@ describe('custom BYOK compat overrides', () => {
 
   it('keeps Vercel gateway routing and nothing else', () => {
     expect(
-      planWithCompat(
+      planWithCompatAt(
+        VERCEL_HOST,
         '{"compat":{"vercelGatewayRouting":{"only":["bedrock","anthropic"],"order":["anthropic"],"bogus":["x"]}}}',
       ),
     ).toEqual({
@@ -545,23 +549,81 @@ describe('custom BYOK compat overrides', () => {
     // Same list semantics as the OpenRouter keys: a mixed or padded list is not
     // silently shrunk, and a sibling left valid survives.
     expect(
-      planWithCompat('{"compat":{"vercelGatewayRouting":{"only":["bedrock",42]}}}'),
+      planWithCompatAt(VERCEL_HOST, '{"compat":{"vercelGatewayRouting":{"only":["bedrock",42]}}}'),
     ).toBeUndefined();
     expect(
-      planWithCompat('{"compat":{"vercelGatewayRouting":{"only":[""],"order":["anthropic"]}}}'),
+      planWithCompatAt(
+        VERCEL_HOST,
+        '{"compat":{"vercelGatewayRouting":{"only":[""],"order":["anthropic"]}}}',
+      ),
     ).toEqual({ vercelGatewayRouting: { order: ['anthropic'] } });
-    expect(planWithCompat('{"compat":{"vercelGatewayRouting":{"only":[]}}}')).toBeUndefined();
+    expect(
+      planWithCompatAt(VERCEL_HOST, '{"compat":{"vercelGatewayRouting":{"only":[]}}}'),
+    ).toBeUndefined();
   });
 
   it('drops Vercel routing when it is not a record of usable keys', () => {
-    expect(planWithCompat('{"compat":{"vercelGatewayRouting":[]}}')).toBeUndefined();
-    expect(planWithCompat('{"compat":{"vercelGatewayRouting":"only"}}')).toBeUndefined();
-    expect(planWithCompat('{"compat":{"vercelGatewayRouting":{"bogus":["x"]}}}')).toBeUndefined();
+    expect(planWithCompatAt(VERCEL_HOST, '{"compat":{"vercelGatewayRouting":[]}}')).toBeUndefined();
+    expect(
+      planWithCompatAt(VERCEL_HOST, '{"compat":{"vercelGatewayRouting":"only"}}'),
+    ).toBeUndefined();
+    expect(
+      planWithCompatAt(VERCEL_HOST, '{"compat":{"vercelGatewayRouting":{"bogus":["x"]}}}'),
+    ).toBeUndefined();
+  });
+
+  it('drops Vercel routing on an endpoint that merely looks like the Vercel host', () => {
+    // The transport tests `baseUrl.includes("ai-gateway.vercel.sh")`, which all
+    // of these satisfy, so the reader has to be the one to refuse them.
+    const lookalikes = [
+      'https://ai-gateway.vercel.sh.example.com/v1',
+      'https://proxy.ai-gateway.vercel.sh/v1',
+      'https://notvercel.example/ai-gateway.vercel.sh/v1',
+      'https://ai-gateway.vercel.sh.evil.com/v1',
+    ];
+    for (const baseURL of lookalikes) {
+      expect(
+        planWithCompatAt(baseURL, '{"compat":{"vercelGatewayRouting":{"only":["bedrock"]}}}'),
+      ).toBeUndefined();
+    }
+  });
+
+  it('keeps other compat keys when Vercel routing is dropped for the endpoint', () => {
+    expect(
+      planWithCompatAt(
+        'https://ai-gateway.vercel.sh.example.com/v1',
+        '{"compat":{"supportsStore":false,"vercelGatewayRouting":{"only":["bedrock"]}}}',
+      ),
+    ).toEqual({ supportsStore: false });
+  });
+
+  it('accepts the Vercel host without a scheme or with a port', () => {
+    expect(
+      planWithCompatAt(
+        'ai-gateway.vercel.sh/v1',
+        '{"compat":{"vercelGatewayRouting":{"only":["bedrock"]}}}',
+      ),
+    ).toEqual({ vercelGatewayRouting: { only: ['bedrock'] } });
+    expect(
+      planWithCompatAt(
+        'https://ai-gateway.vercel.sh:443/v1',
+        '{"compat":{"vercelGatewayRouting":{"only":["bedrock"]}}}',
+      ),
+    ).toEqual({ vercelGatewayRouting: { only: ['bedrock'] } });
+  });
+
+  it('leaves OpenRouter routing ungated by the endpoint', () => {
+    // Unlike the Vercel field, the transport applies this one for any endpoint,
+    // so the reader must not quietly drop it on a non-OpenRouter host.
+    expect(planWithCompat('{"compat":{"openRouterRouting":{"only":["DeepSeek"]}}}')).toEqual({
+      openRouterRouting: { only: ['DeepSeek'] },
+    });
   });
 
   it('carries both routing dialects at once without cross-talk', () => {
     expect(
-      planWithCompat(
+      planWithCompatAt(
+        VERCEL_HOST,
         '{"compat":{"openRouterRouting":{"only":["DeepSeek"]},"vercelGatewayRouting":{"order":["anthropic"]}}}',
       ),
     ).toEqual({

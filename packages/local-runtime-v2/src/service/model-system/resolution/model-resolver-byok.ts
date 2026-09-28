@@ -87,7 +87,10 @@ export function planCustomProviderResolution(input: {
     readStringRecord(config.options?.headers),
     readStringRecord(modelConfig.headers),
   );
-  const modelCompat = readModelCompat(modelConfig.compat);
+  const modelCompat = restrictRoutingToEndpoint(
+    readModelCompat(modelConfig.compat),
+    config.options?.baseURL,
+  );
   return {
     provider: input.provider,
     api: resolveCustomProviderApi(config.api),
@@ -324,6 +327,44 @@ const ROUTING_LIST_KEYS = ['order', 'only', 'ignore', 'quantizations'] as const;
 const ROUTING_PERCENTILE_KEYS = ['preferred_min_throughput', 'preferred_max_latency'] as const;
 const DATA_COLLECTIONS = ['allow', 'deny'] as const;
 const VERCEL_ROUTING_LIST_KEYS = ['only', 'order'] as const;
+const VERCEL_GATEWAY_HOST = 'ai-gateway.vercel.sh';
+
+/** Hostname of a base URL, tolerating a missing scheme. */
+function hostnameOf(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(value) ? value : `https://${value}`;
+  try {
+    return new URL(withScheme).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Drops `vercelGatewayRouting` unless the endpoint really is a Vercel AI
+ * Gateway host.
+ *
+ * The transport decides with `model.baseUrl.includes("ai-gateway.vercel.sh")` —
+ * a substring test, not a hostname test. `ai-gateway.vercel.sh.example.com`
+ * matches it, and so does any URL carrying that string in a path. Since the
+ * Vercel branch attaches gateway-only body fields, an endpoint that merely looks
+ * Vercel-ish should not be able to attract them, and the transport is vendored
+ * third-party code that this patch does not modify.
+ *
+ * Gating here means the field is only ever produced for an exact hostname, so
+ * the loose check downstream cannot be reached with a lookalike. Every other
+ * compat key passes through untouched.
+ */
+function restrictRoutingToEndpoint(
+  compat: LocalModelCompatOverrides | undefined,
+  baseUrl: string | undefined,
+): LocalModelCompatOverrides | undefined {
+  if (!compat?.vercelGatewayRouting) return compat;
+  if (hostnameOf(baseUrl) === VERCEL_GATEWAY_HOST) return compat;
+  const rest: LocalModelCompatOverrides = { ...compat };
+  delete rest.vercelGatewayRouting;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
 
 /**
  * Reads `compat.vercelGatewayRouting` out of untrusted provider config.
@@ -406,11 +447,13 @@ function readRoutingSort(
 /**
  * Read `compat.openRouterRouting` out of untrusted provider config.
  *
- * The object is forwarded verbatim to OpenRouter as the request `provider`
- * field, so every key is validated at its declared type and anything unknown or
- * malformed is dropped. A rejected key never invalidates its valid siblings,
- * and an object left with no usable keys is dropped entirely so an empty
- * `provider` object is never sent.
+ * The result is attached to the request as the `provider` field by the
+ * openai-completions transport, which does not check the endpoint — so this is
+ * not restricted to OpenRouter and it is not forwarded verbatim: every key is
+ * validated at its declared type and anything unknown or malformed is dropped.
+ * A rejected key never invalidates its valid siblings, and an object left with
+ * no usable keys is dropped entirely so an empty `provider` object is never
+ * sent.
  */
 function readOpenRouterRouting(value: unknown): OpenRouterRouting | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;

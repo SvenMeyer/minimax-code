@@ -77,8 +77,10 @@ export interface LocalModelCompatOverrides {
    * `providerOptions.gateway` on the request.
    *
    * Only `only` and `order` are declared, and the pi transport reads only those
-   * two. Unlike {@link openRouterRouting}, the transport also gates this on the
-   * base URL (`ai-gateway.vercel.sh`), so it cannot reach another gateway.
+   * two. The transport's own endpoint check is a substring test on the base URL
+   * (`includes("ai-gateway.vercel.sh")`), which a lookalike host would pass, so
+   * the BYOK reader additionally gates this on an exact hostname — the field is
+   * only produced for a real Vercel AI Gateway endpoint.
    * @see https://vercel.com/docs/ai-gateway/models-and-providers#provider-routing
    */
   vercelGatewayRouting?: VercelGatewayRouting;
