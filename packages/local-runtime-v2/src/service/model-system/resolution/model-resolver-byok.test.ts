@@ -386,6 +386,40 @@ describe('custom BYOK compat overrides', () => {
     ).toEqual({ openRouterRouting: { zdr: true } });
   });
 
+  it('rejects a sparse provider list', () => {
+    // JSON cannot carry a hole, so the config is built directly rather than
+    // parsed. `every` skips holes: without densifying first, this array would
+    // satisfy the `string[]` predicate and serialise its hole as `null` on the
+    // wire, which is the malformed list the reader exists to reject.
+    // The repo's linter forbids a sparse array literal, so the hole is made by
+    // allocating then leaving an index unset.
+    const sparse = new Array<string>(3);
+    sparse[0] = 'DeepSeek';
+    sparse[2] = 'DeepInfra';
+    expect(1 in sparse).toBe(false); // index 1 really is a hole
+    expect(sparse.every(() => true)).toBe(true); // every() is blind to it
+    expect(
+      planCustomProviderResolution({
+        provider: 'custom_provider:gateway',
+        providerKey: 'gateway',
+        modelId: 'kimi-k2-thinking',
+        byok: {
+          custom_provider: {
+            gateway: {
+              api: 'openai-completions',
+              options: { apiKey: 'gateway-key', baseURL: 'https://gateway.example/v1' },
+              models: {
+                'kimi-k2-thinking': {
+                  compat: { openRouterRouting: { only: sparse } } as never,
+                },
+              },
+            },
+          },
+        },
+      })?.modelCompat,
+    ).toBeUndefined();
+  });
+
   it('rejects a provider list padded with an empty entry', () => {
     // An empty slug can never match a provider, so it is as invalid as a
     // non-string. readStrategy rejects the empty string in the scalar case, so

@@ -233,9 +233,15 @@ function readCompatEnum<T extends string>(value: unknown, allowed: readonly T[])
  * An entry that is empty or whitespace-only is not a slug, so it fails here the
  * same way a non-string does. `readStrategy` already rejects the empty string in
  * the analogous scalar case; a list must not be laxer than a plain value.
+ *
+ * `Array.from` first, because `every` skips holes in a sparse array: `["a", , "b"]`
+ * would otherwise satisfy this predicate while not being a `string[]` at all, and
+ * a hole serialises to `null` on the wire — the malformed list this rejects.
+ * Persisted config is JSON-parsed and cannot contain a hole, so this is soundness
+ * rather than a live path.
  */
 function isProviderSlugList(value: unknown[]): value is string[] {
-  return value.every((entry) => typeof entry === 'string' && entry.trim() !== '');
+  return Array.from(value).every((entry) => typeof entry === 'string' && entry.trim() !== '');
 }
 
 /**
