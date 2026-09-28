@@ -1720,4 +1720,18 @@ describe('LocalModelResolver custom provider session affinity', () => {
 
     expect(payload.providerOptions).toBeUndefined();
   });
+
+  it('sends Vercel gateway options for a mixed-case host', async () => {
+    // The transport's endpoint check is case-sensitive, so a host the reader
+    // approved must actually reach the wire in the form the transport matches.
+    // Without host folding this asserted nothing: the reader said yes and the
+    // request silently carried no gateway options.
+    const payload = await vercelRoutingFor(
+      { vercelGatewayRouting: { only: ['bedrock'] } },
+      'https://AI-GATEWAY.VERCEL.SH/v1',
+    );
+
+    expect(payload.providerOptions).toEqual({ gateway: { only: ['bedrock'] } });
+    expect(payload.provider).toBeUndefined();
+  });
 });

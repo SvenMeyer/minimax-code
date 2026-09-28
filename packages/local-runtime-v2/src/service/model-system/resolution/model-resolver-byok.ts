@@ -87,14 +87,15 @@ export function planCustomProviderResolution(input: {
     readStringRecord(config.options?.headers),
     readStringRecord(modelConfig.headers),
   );
-  const modelCompat = restrictRoutingToEndpoint(
-    readModelCompat(modelConfig.compat),
-    config.options?.baseURL,
-  );
+  // The host is folded to lower case before the gate reads it, so the URL the
+  // transport will see is the same one this decision is made about.
+  const baseUrl = lowercaseBaseUrlHost(credentials.baseUrl);
+  const modelCompat = restrictRoutingToEndpoint(readModelCompat(modelConfig.compat), baseUrl);
   return {
     provider: input.provider,
     api: resolveCustomProviderApi(config.api),
     ...credentials,
+    baseUrl,
     ...customProviderLimits(modelConfig),
     ...(configHeaders ? { configHeaders } : {}),
     ...(modelCompat ? { modelCompat } : {}),
@@ -340,6 +341,29 @@ function hostnameOf(value: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Lowercases the host (and port) of a base URL, leaving scheme and path alone.
+ *
+ * Hostnames are case-insensitive, but the pi transport recognises the Vercel
+ * gateway with a case-sensitive substring test, and the URL normalizer only
+ * strips path suffixes. `https://AI-GATEWAY.VERCEL.SH/v1` would therefore be
+ * approved by the reader below and then silently ignored on the wire — the
+ * reader and transport disagreeing about the same URL. Folding the host here
+ * keeps them in agreement, and the routing the user configured is applied.
+ */
+function lowercaseBaseUrlHost(baseUrl: string): string {
+  const schemeEnd = baseUrl.indexOf('://');
+  const scheme = schemeEnd === -1 ? '' : baseUrl.slice(0, schemeEnd + 3);
+  const remainder = baseUrl.slice(scheme.length);
+  const authorityEnd = remainder.search(/[/?#]/u);
+  const authority = authorityEnd === -1 ? remainder : remainder.slice(0, authorityEnd);
+  const tail = authorityEnd === -1 ? '' : remainder.slice(authorityEnd);
+  const credentialsEnd = authority.lastIndexOf('@');
+  const userinfo = authority.slice(0, credentialsEnd + 1);
+  const hostAndPort = authority.slice(credentialsEnd + 1);
+  return `${scheme}${userinfo}${hostAndPort.toLowerCase()}${tail}`;
 }
 
 /**
