@@ -1,4 +1,4 @@
-import type { Api } from '@earendil-works/pi-ai';
+import type { Api, OpenRouterRouting } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 import type { LLMModelConfig } from '@mavis/agent-core/pi-turn-runner';
 import type {
@@ -60,6 +60,13 @@ export interface LocalModelCompatOverrides {
     | 'string-thinking'
     | 'ant-ling';
   cacheControlFormat?: 'anthropic';
+  /**
+   * OpenRouter provider routing preferences, sent as the request `provider`
+   * field. The pi transport already honors this; it only becomes reachable
+   * once the BYOK reader stops dropping it. Ignored by other providers.
+   * @see https://openrouter.ai/docs/guides/routing/provider-selection
+   */
+  openRouterRouting?: OpenRouterRouting;
 }
 
 export interface LocalModelConfig extends Omit<
@@ -217,8 +224,7 @@ export interface LocalModelResolverOptions {
     loginEpoch?: string,
   ) => void | Promise<void>;
   readonly routingContextGetter?: () =>
-    | import('@mavis/agent-tools/desktop').ManagedBackendRoutingContext
-    | undefined;
+    import('@mavis/agent-tools/desktop').ManagedBackendRoutingContext | undefined;
   readonly providerAuthGetter?: (
     provider: string,
   ) => Promise<string | undefined> | string | undefined;
@@ -365,8 +371,7 @@ export interface DiscoveredModel {
 }
 
 export type ModelDiscoveryResult =
-  | { ok: true; models: DiscoveredModel[] }
-  | { ok: false; errorCode: string; errorMessage: string };
+  { ok: true; models: DiscoveredModel[] } | { ok: false; errorCode: string; errorMessage: string };
 
 export interface ModelDiscoveryClientLike {
   discover(target: ModelDiscoveryTarget): Promise<ModelDiscoveryResult>;
