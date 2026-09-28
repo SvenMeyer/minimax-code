@@ -1,4 +1,4 @@
-import type { Api, OpenRouterRouting } from '@earendil-works/pi-ai';
+import type { Api, OpenRouterRouting, VercelGatewayRouting } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 import type { LLMModelConfig } from '@mavis/agent-core/pi-turn-runner';
 import type {
@@ -72,6 +72,16 @@ export interface LocalModelCompatOverrides {
    * @see https://openrouter.ai/docs/guides/routing/provider-selection
    */
   openRouterRouting?: OpenRouterRouting;
+  /**
+   * Vercel AI Gateway provider routing preferences, sent as
+   * `providerOptions.gateway` on the request.
+   *
+   * Only `only` and `order` are declared, and the pi transport reads only those
+   * two. Unlike {@link openRouterRouting}, the transport also gates this on the
+   * base URL (`ai-gateway.vercel.sh`), so it cannot reach another gateway.
+   * @see https://vercel.com/docs/ai-gateway/models-and-providers#provider-routing
+   */
+  vercelGatewayRouting?: VercelGatewayRouting;
 }
 
 export interface LocalModelConfig extends Omit<
