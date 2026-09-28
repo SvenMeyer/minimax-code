@@ -514,8 +514,8 @@ function readOpenRouterRouting(value: unknown): OpenRouterRouting | undefined {
  * forwarded, because pi treats any present field as an explicit override and a truthy
  * string such as `"false"` would otherwise invert the intended behavior.
  *
- * `openRouterRouting` is the one object-valued field, so it is validated
- * structurally by {@link readOpenRouterRouting} rather than key by key here.
+ * The object-valued fields, `openRouterRouting` and `vercelGatewayRouting`, are
+ * validated structurally by their own readers rather than key by key here.
  */
 function readModelCompat(value: unknown): LocalModelCompatOverrides | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
