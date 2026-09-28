@@ -228,34 +228,31 @@ function readCompatEnum<T extends string>(value: unknown, allowed: readonly T[])
 }
 
 /**
- * Narrows to `string[]` only when *every* entry is a usable provider slug.
- *
- * An entry that is empty or whitespace-only is not a slug, so it fails here the
- * same way a non-string does. `readStrategy` already rejects the empty string in
- * the analogous scalar case; a list must not be laxer than a plain value.
- *
- * `Array.from` first, because `every` skips holes in a sparse array: `["a", , "b"]`
- * would otherwise satisfy this predicate while not being a `string[]` at all, and
- * a hole serialises to `null` on the wire — the malformed list this rejects.
- * Persisted config is JSON-parsed and cannot contain a hole, so this is soundness
- * rather than a live path.
- */
-function isProviderSlugList(value: unknown[]): value is string[] {
-  return Array.from(value).every((entry) => typeof entry === 'string' && entry.trim() !== '');
-}
-
-/**
  * Reads a list-shaped routing key (`only`, `order`, `ignore`, `quantizations`).
  *
  * A mixed array is not a `string[]`, so the whole list is rejected rather than
  * filtered down. Silently shrinking one would change the routing decision
  * without saying so — `only: ["DeepSeek", 42]` would otherwise pin to a
- * different provider set than the one that was written. The same applies to a
- * list padded with an empty entry, which could never match a provider.
+ * different provider set than the one that was written. A list padded with an
+ * empty entry is rejected for the same reason: an empty slug can never match.
+ *
+ * Entries are trimmed, matching {@link readStrategy} and for the same reason: a
+ * padded slug matches no provider, so forwarding it verbatim makes the routing
+ * silently ineffective, while dropping the list would silently discard routing
+ * the user did configure. The result is always a new array, so the parsed config
+ * is never mutated.
+ *
+ * `Array.from` densifies first because `every` skips holes: `["a", , "b"]` would
+ * otherwise satisfy the string check while not being a `string[]` at all, and a
+ * hole serialises to `null` on the wire. Persisted config is JSON-parsed and
+ * cannot contain a hole, so that part is soundness rather than a live path.
  */
 function readStringList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value) || !isProviderSlugList(value) || value.length === 0) return undefined;
-  return value;
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const entries = Array.from(value);
+  if (!entries.every((entry): entry is string => typeof entry === 'string')) return undefined;
+  const trimmed = entries.map((entry) => entry.trim());
+  return trimmed.includes('') ? undefined : trimmed;
 }
 
 /** Reads a finite number, dropping NaN/Infinity that JSON cannot legitimately carry. */

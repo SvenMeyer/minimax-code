@@ -431,6 +431,21 @@ describe('custom BYOK compat overrides', () => {
     ).toEqual({ openRouterRouting: { zdr: true } });
   });
 
+  it('trims incidental whitespace from list entries', () => {
+    // A padded slug matches no provider, so forwarding it verbatim would make
+    // the routing silently ineffective while rejecting would discard routing the
+    // user did configure. readStrategy trims scalars for the same reason.
+    expect(planWithCompat('{"compat":{"openRouterRouting":{"only":[" DeepSeek "]}}}')).toEqual({
+      openRouterRouting: { only: ['DeepSeek'] },
+    });
+    expect(
+      planWithCompatAt(
+        VERCEL_HOST,
+        '{"compat":{"vercelGatewayRouting":{"order":[" anthropic ","bedrock"]}}}',
+      ),
+    ).toEqual({ vercelGatewayRouting: { order: ['anthropic', 'bedrock'] } });
+  });
+
   it('trims incidental whitespace from a strategy string', () => {
     // A padded value cannot match anything OpenRouter knows; forwarding it
     // verbatim would fail, and dropping the key would discard routing silently.
