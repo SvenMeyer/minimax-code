@@ -223,9 +223,15 @@ function readCompatEnum<T extends string>(value: unknown, allowed: readonly T[])
   return typeof value === 'string' ? allowed.find((option) => option === value) : undefined;
 }
 
-/** Narrows to `string[]` only when *every* entry is a string. */
-function isStringArray(value: unknown[]): value is string[] {
-  return value.every((entry) => typeof entry === 'string');
+/**
+ * Narrows to `string[]` only when *every* entry is a usable provider slug.
+ *
+ * An entry that is empty or whitespace-only is not a slug, so it fails here the
+ * same way a non-string does. `readStrategy` already rejects the empty string in
+ * the analogous scalar case; a list must not be laxer than a plain value.
+ */
+function isProviderSlugList(value: unknown[]): value is string[] {
+  return value.every((entry) => typeof entry === 'string' && entry.trim() !== '');
 }
 
 /**
@@ -234,10 +240,11 @@ function isStringArray(value: unknown[]): value is string[] {
  * A mixed array is not a `string[]`, so the whole list is rejected rather than
  * filtered down. Silently shrinking one would change the routing decision
  * without saying so — `only: ["DeepSeek", 42]` would otherwise pin to a
- * different provider set than the one that was written.
+ * different provider set than the one that was written. The same applies to a
+ * list padded with an empty entry, which could never match a provider.
  */
 function readStringList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value) || !isStringArray(value) || value.length === 0) return undefined;
+  if (!Array.isArray(value) || !isProviderSlugList(value) || value.length === 0) return undefined;
   return value;
 }
 
@@ -322,8 +329,15 @@ const DATA_COLLECTIONS = ['allow', 'deny'] as const;
  *
  * The declared contract is plain `string` — pi documents `price`, `throughput`
  * and `latency` as examples ("e.g."), not as an exhaustive union — so this
- * checks the type and rejects only the empty string. Narrowing to the examples
- * would silently drop a strategy the shared type permits and pi forwards.
+ * checks the type and rejects only the empty/whitespace-only string. Narrowing
+ * to the examples would silently drop a strategy the shared type permits and pi
+ * forwards.
+ *
+ * Incidental surrounding whitespace is trimmed rather than rejected: a padded
+ * value cannot match anything OpenRouter knows, so forwarding it verbatim would
+ * fail the request, and dropping the whole key would silently discard routing
+ * the user did configure. Trimming is the one case where rewriting the value is
+ * safer than either alternative.
  */
 function readStrategy(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
