@@ -220,11 +220,22 @@ function readCompatEnum<T extends string>(value: unknown, allowed: readonly T[])
   return typeof value === 'string' ? allowed.find((option) => option === value) : undefined;
 }
 
-/** Keeps only the string entries of a list-shaped routing key. */
+/** Narrows to `string[]` only when *every* entry is a string. */
+function isStringArray(value: unknown[]): value is string[] {
+  return value.every((entry) => typeof entry === 'string');
+}
+
+/**
+ * Reads a list-shaped routing key (`only`, `order`, `ignore`, `quantizations`).
+ *
+ * A mixed array is not a `string[]`, so the whole list is rejected rather than
+ * filtered down. Silently shrinking one would change the routing decision
+ * without saying so — `only: ["DeepSeek", 42]` would otherwise pin to a
+ * different provider set than the one that was written.
+ */
 function readStringList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const entries = value.filter((entry): entry is string => typeof entry === 'string');
-  return entries.length > 0 ? entries : undefined;
+  if (!Array.isArray(value) || !isStringArray(value) || value.length === 0) return undefined;
+  return value;
 }
 
 /** Reads a finite number, dropping NaN/Infinity that JSON cannot legitimately carry. */
