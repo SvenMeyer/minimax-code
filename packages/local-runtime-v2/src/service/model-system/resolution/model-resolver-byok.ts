@@ -1,4 +1,4 @@
-import type { Api } from '@earendil-works/pi-ai';
+import type { Api, OpenRouterRouting, VercelGatewayRouting } from '@earendil-works/pi-ai';
 import { MINIMAX_API_MODEL_CATALOG, getRuntimeRegion } from '@mavis/config';
 
 import type {
@@ -87,11 +87,15 @@ export function planCustomProviderResolution(input: {
     readStringRecord(config.options?.headers),
     readStringRecord(modelConfig.headers),
   );
-  const modelCompat = readModelCompat(modelConfig.compat);
+  // The host is folded to lower case before the gate reads it, so the URL the
+  // transport will see is the same one this decision is made about.
+  const baseUrl = lowercaseBaseUrlHost(credentials.baseUrl);
+  const modelCompat = restrictRoutingToEndpoint(readModelCompat(modelConfig.compat), baseUrl);
   return {
     provider: input.provider,
     api: resolveCustomProviderApi(config.api),
     ...credentials,
+    baseUrl,
     ...customProviderLimits(modelConfig),
     ...(configHeaders ? { configHeaders } : {}),
     ...(modelCompat ? { modelCompat } : {}),
@@ -224,12 +228,300 @@ function readCompatEnum<T extends string>(value: unknown, allowed: readonly T[])
 }
 
 /**
+ * Reads a list-shaped routing key (`only`, `order`, `ignore`, `quantizations`).
+ *
+ * A mixed array is not a `string[]`, so the whole list is rejected rather than
+ * filtered down. Silently shrinking one would change the routing decision
+ * without saying so — `only: ["DeepSeek", 42]` would otherwise pin to a
+ * different provider set than the one that was written. A list padded with an
+ * empty entry is rejected for the same reason: an empty slug can never match.
+ *
+ * Entries are trimmed, matching {@link readStrategy} and for the same reason: a
+ * padded slug matches no provider, so forwarding it verbatim makes the routing
+ * silently ineffective, while dropping the list would silently discard routing
+ * the user did configure. The result is always a new array, so the parsed config
+ * is never mutated.
+ *
+ * `Array.from` densifies first because `every` skips holes: `["a", , "b"]` would
+ * otherwise satisfy the string check while not being a `string[]` at all, and a
+ * hole serialises to `null` on the wire. Persisted config is JSON-parsed and
+ * cannot contain a hole, so that part is soundness rather than a live path.
+ */
+function readStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const entries = Array.from(value);
+  if (!entries.every((entry): entry is string => typeof entry === 'string')) return undefined;
+  const trimmed = entries.map((entry) => entry.trim());
+  return trimmed.includes('') ? undefined : trimmed;
+}
+
+/** Reads a finite number, dropping NaN/Infinity that JSON cannot legitimately carry. */
+function readNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** A decimal number, optionally signed and optionally in exponent form. */
+const NUMERIC_STRING = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/**
+ * Reads a numeric-or-string money field (`max_price.*`). OpenRouter accepts both
+ * a number and a decimal string here, so the declared type is a union.
+ *
+ * The string form must still be a usable number. Accepting any non-empty string
+ * would forward values like `"free"` or `"$5"` as a price ceiling, and accepting
+ * the exponent form unchecked would forward `"1e999"`, which parses to
+ * `Infinity` — the same non-finite value the numeric branch rejects.
+ */
+function readNumberish(value: unknown): number | string | undefined {
+  if (typeof value === 'number') return readNumber(value);
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!NUMERIC_STRING.test(trimmed) || !Number.isFinite(Number(trimmed))) return undefined;
+  return trimmed;
+}
+
+const MAX_PRICE_KEYS = ['prompt', 'completion', 'image', 'audio', 'request'] as const;
+const PERCENTILE_KEYS = ['p50', 'p75', 'p90', 'p99'] as const;
+
+/**
+ * Reads `{ prompt?, completion?, image?, audio?, request? }` price ceilings.
+ *
+ * Iterates the known keys rather than the object's own entries: an unrecognised
+ * key is not a declared field, so it must not ride along into the request. This
+ * is the same rule the scalar reader applies, and it is what keeps a
+ * non-OpenRouter shape from being forwarded as a routing override.
+ */
+function readMaxPrice(value: unknown): Record<string, number | string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const maxPrice: Record<string, number | string> = {};
+  for (const key of MAX_PRICE_KEYS) {
+    const candidate = readNumberish(source[key]);
+    if (candidate !== undefined) maxPrice[key] = candidate;
+  }
+  return Object.keys(maxPrice).length > 0 ? maxPrice : undefined;
+}
+
+/**
+ * Reads a percentile cutoff map (`p50`, `p75`, `p90`, `p99`), used by the
+ * `preferred_min_throughput` / `preferred_max_latency` fields. These accept a
+ * bare number as well, but the object form is numeric-only.
+ *
+ * Known-keys-only, for the same reason as {@link readMaxPrice}: a percentile
+ * outside the declared set is not a field OpenRouter accepts.
+ */
+function readPercentiles(value: unknown): Record<string, number> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const percentiles: Record<string, number> = {};
+  for (const key of PERCENTILE_KEYS) {
+    const candidate = readNumber(source[key]);
+    if (candidate !== undefined) percentiles[key] = candidate;
+  }
+  return Object.keys(percentiles).length > 0 ? percentiles : undefined;
+}
+
+const ROUTING_BOOLEAN_KEYS = [
+  'allow_fallbacks',
+  'require_parameters',
+  'zdr',
+  'enforce_distillable_text',
+] as const;
+const ROUTING_LIST_KEYS = ['order', 'only', 'ignore', 'quantizations'] as const;
+const ROUTING_PERCENTILE_KEYS = ['preferred_min_throughput', 'preferred_max_latency'] as const;
+const DATA_COLLECTIONS = ['allow', 'deny'] as const;
+const VERCEL_ROUTING_LIST_KEYS = ['only', 'order'] as const;
+const VERCEL_GATEWAY_HOST = 'ai-gateway.vercel.sh';
+
+/** Hostname of a base URL, tolerating a missing scheme and a trailing-dot FQDN. */
+function hostnameOf(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(value) ? value : `https://${value}`;
+  try {
+    // A single trailing dot is the DNS root label and names the same host, so
+    // `ai-gateway.vercel.sh.` must not be treated as a different endpoint.
+    return new URL(withScheme).hostname.toLowerCase().replace(/\.$/u, '');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Lowercases the host (and port) of a base URL, leaving scheme and path alone.
+ *
+ * Hostnames are case-insensitive, but the pi transport recognises the Vercel
+ * gateway with a case-sensitive substring test, and the URL normalizer only
+ * strips path suffixes. `https://AI-GATEWAY.VERCEL.SH/v1` would therefore be
+ * approved by the reader below and then silently ignored on the wire — the
+ * reader and transport disagreeing about the same URL. Folding the host here
+ * keeps them in agreement, and the routing the user configured is applied.
+ */
+function lowercaseBaseUrlHost(baseUrl: string): string {
+  const schemeEnd = baseUrl.indexOf('://');
+  const scheme = schemeEnd === -1 ? '' : baseUrl.slice(0, schemeEnd + 3);
+  const remainder = baseUrl.slice(scheme.length);
+  const authorityEnd = remainder.search(/[/?#]/u);
+  const authority = authorityEnd === -1 ? remainder : remainder.slice(0, authorityEnd);
+  const tail = authorityEnd === -1 ? '' : remainder.slice(authorityEnd);
+  const credentialsEnd = authority.lastIndexOf('@');
+  const userinfo = authority.slice(0, credentialsEnd + 1);
+  const hostAndPort = authority.slice(credentialsEnd + 1);
+  return `${scheme}${userinfo}${hostAndPort.toLowerCase()}${tail}`;
+}
+
+/**
+ * Drops `vercelGatewayRouting` unless the endpoint really is a Vercel AI
+ * Gateway host.
+ *
+ * The transport decides with `model.baseUrl.includes("ai-gateway.vercel.sh")` —
+ * a substring test, not a hostname test. `ai-gateway.vercel.sh.example.com`
+ * matches it, and so does any URL carrying that string in a path. Since the
+ * Vercel branch attaches gateway-only body fields, an endpoint that merely looks
+ * Vercel-ish should not be able to attract them, and the transport is vendored
+ * third-party code that this patch does not modify.
+ *
+ * Gating here means the field is only ever produced for an exact hostname, so
+ * the loose check downstream cannot be reached with a lookalike. Every other
+ * compat key passes through untouched.
+ */
+function restrictRoutingToEndpoint(
+  compat: LocalModelCompatOverrides | undefined,
+  baseUrl: string | undefined,
+): LocalModelCompatOverrides | undefined {
+  if (!compat?.vercelGatewayRouting) return compat;
+  if (hostnameOf(baseUrl) === VERCEL_GATEWAY_HOST) return compat;
+  const rest: LocalModelCompatOverrides = { ...compat };
+  delete rest.vercelGatewayRouting;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
+/**
+ * Reads `compat.vercelGatewayRouting` out of untrusted provider config.
+ *
+ * `VercelGatewayRouting` declares exactly `only` and `order`, both `string[]`,
+ * and the transport reads only those two before building
+ * `providerOptions.gateway` — so keeping to the declared keys is both the
+ * contract and the whole of what can have an effect.
+ *
+ * This function does not decide the endpoint. {@link restrictRoutingToEndpoint}
+ * does, and it is load-bearing rather than defensive: the transport's own check
+ * is a substring test (`baseUrl.includes("ai-gateway.vercel.sh")`) that a
+ * lookalike host passes, so removing that gate would let Vercel-only body fields
+ * reach a host that merely looks Vercel. Do not drop it as redundant.
+ */
+function readVercelGatewayRouting(value: unknown): VercelGatewayRouting | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const routing: VercelGatewayRouting = {};
+  for (const key of VERCEL_ROUTING_LIST_KEYS) {
+    const list = readStringList(source[key]);
+    if (list) routing[key] = list;
+  }
+  return Object.keys(routing).length > 0 ? routing : undefined;
+}
+
+/**
+ * A non-empty strategy string, for `sort` / `sort.by` / `sort.partition`.
+ *
+ * The declared contract is plain `string` — pi documents `price`, `throughput`
+ * and `latency` as examples ("e.g."), not as an exhaustive union — so this
+ * checks the type and rejects only the empty/whitespace-only string. Narrowing
+ * to the examples would silently drop a strategy the shared type permits and pi
+ * forwards.
+ *
+ * Incidental surrounding whitespace is trimmed rather than rejected: a padded
+ * value cannot match anything OpenRouter knows, so forwarding it verbatim would
+ * fail the request, and dropping the whole key would silently discard routing
+ * the user did configure. Trimming is the one case where rewriting the value is
+ * safer than either alternative.
+ */
+function readStrategy(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+/**
+ * Reads `sort`, which OpenRouter accepts either as a bare strategy name or as
+ * `{ by, partition }`.
+ *
+ * The object form is validated atomically: if a key that is *present* fails
+ * validation the whole object is dropped, so a partial sort is never forwarded
+ * as a routing override. Unknown keys are ignored, as everywhere else.
+ */
+function readRoutingSort(
+  value: unknown,
+): string | { by?: string; partition?: string | null } | undefined {
+  const bare = readStrategy(value);
+  if (bare) return bare;
+  if (typeof value === 'string') return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const sort: { by?: string; partition?: string | null } = {};
+  if (source.by !== undefined) {
+    const by = readStrategy(source.by);
+    if (!by) return undefined;
+    sort.by = by;
+  }
+  if (source.partition !== undefined) {
+    if (source.partition === null) {
+      sort.partition = null;
+    } else {
+      const partition = readStrategy(source.partition);
+      if (!partition) return undefined;
+      sort.partition = partition;
+    }
+  }
+  return sort.by || sort.partition !== undefined ? sort : undefined;
+}
+
+/**
+ * Read `compat.openRouterRouting` out of untrusted provider config.
+ *
+ * The result is attached to the request as the `provider` field by the
+ * openai-completions transport, which does not check the endpoint — so this is
+ * not restricted to OpenRouter and it is not forwarded verbatim: every key is
+ * validated at its declared type and anything unknown or malformed is dropped.
+ * A rejected key never invalidates its valid siblings, and an object left with
+ * no usable keys is dropped entirely so an empty `provider` object is never
+ * sent.
+ */
+function readOpenRouterRouting(value: unknown): OpenRouterRouting | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const source: Record<string, unknown> = { ...value };
+  const routing: OpenRouterRouting = {};
+  for (const key of ROUTING_BOOLEAN_KEYS) {
+    const candidate = source[key];
+    if (typeof candidate === 'boolean') routing[key] = candidate;
+  }
+  const dataCollection = readCompatEnum(source.data_collection, DATA_COLLECTIONS);
+  if (dataCollection) routing.data_collection = dataCollection;
+  for (const key of ROUTING_LIST_KEYS) {
+    const list = readStringList(source[key]);
+    if (list) routing[key] = list;
+  }
+  const sort = readRoutingSort(source.sort);
+  if (sort) routing.sort = sort;
+  const maxPrice = readMaxPrice(source.max_price);
+  if (maxPrice) routing.max_price = maxPrice;
+  for (const key of ROUTING_PERCENTILE_KEYS) {
+    // A bare number is valid on its own; the object form needs the map reader.
+    const percentiles = readPercentiles(source[key]) ?? readNumber(source[key]);
+    if (percentiles !== undefined) routing[key] = percentiles;
+  }
+  return Object.keys(routing).length > 0 ? routing : undefined;
+}
+
+/**
  * Read model-level compatibility overrides out of untrusted provider config.
  *
  * The `custom_provider` config subtree is persisted as opaque JSON, so each field is
  * accepted only at its declared type. A value of the wrong type is dropped rather than
  * forwarded, because pi treats any present field as an explicit override and a truthy
  * string such as `"false"` would otherwise invert the intended behavior.
+ *
+ * The object-valued fields, `openRouterRouting` and `vercelGatewayRouting`, are
+ * validated structurally by their own readers rather than key by key here.
  */
 function readModelCompat(value: unknown): LocalModelCompatOverrides | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -245,6 +537,10 @@ function readModelCompat(value: unknown): LocalModelCompatOverrides | undefined 
   if (thinkingFormat) compat.thinkingFormat = thinkingFormat;
   const cacheControlFormat = readCompatEnum(source.cacheControlFormat, CACHE_CONTROL_FORMATS);
   if (cacheControlFormat) compat.cacheControlFormat = cacheControlFormat;
+  const openRouterRouting = readOpenRouterRouting(source.openRouterRouting);
+  if (openRouterRouting) compat.openRouterRouting = openRouterRouting;
+  const vercelGatewayRouting = readVercelGatewayRouting(source.vercelGatewayRouting);
+  if (vercelGatewayRouting) compat.vercelGatewayRouting = vercelGatewayRouting;
   return Object.keys(compat).length > 0 ? compat : undefined;
 }
 

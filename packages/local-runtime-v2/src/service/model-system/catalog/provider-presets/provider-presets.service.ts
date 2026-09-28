@@ -164,6 +164,12 @@ function resolveTransport(
       providerId === 'anthropic' && provider.api === undefined
         ? MESSAGES_API_BASE_URL
         : stringValue(provider.api);
+  } else if (providerId === 'openrouter') {
+    // models.dev publishes OpenRouter as @openrouter/ai-sdk-provider. Its HTTP
+    // API is OpenAI-compatible Chat Completions, which this runtime already speaks.
+    // Match the provider id, not the npm package: other catalogs reuse that package.
+    apiFormat = 'openai-completions';
+    baseUrl = stringValue(provider.api);
   } else {
     return undefined;
   }

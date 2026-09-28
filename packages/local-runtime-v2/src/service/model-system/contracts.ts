@@ -1,4 +1,4 @@
-import type { Api } from '@earendil-works/pi-ai';
+import type { Api, OpenRouterRouting, VercelGatewayRouting } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 import type { LLMModelConfig } from '@mavis/agent-core/pi-turn-runner';
 import type {
@@ -60,6 +60,30 @@ export interface LocalModelCompatOverrides {
     | 'string-thinking'
     | 'ant-ling';
   cacheControlFormat?: 'anthropic';
+  /**
+   * OpenRouter provider routing preferences, sent as the request `provider`
+   * field.
+   *
+   * The pi openai-completions transport attaches this whenever it is present,
+   * for any endpoint on that transport — it does not check the base URL, unlike
+   * the Vercel gateway routing beside it. Set it only on models served by
+   * OpenRouter: other OpenAI-compatible gateways receive the extra `provider`
+   * field in the request body.
+   * @see https://openrouter.ai/docs/guides/routing/provider-selection
+   */
+  openRouterRouting?: OpenRouterRouting;
+  /**
+   * Vercel AI Gateway provider routing preferences, sent as
+   * `providerOptions.gateway` on the request.
+   *
+   * Only `only` and `order` are declared, and the pi transport reads only those
+   * two. The transport's own endpoint check is a substring test on the base URL
+   * (`includes("ai-gateway.vercel.sh")`), which a lookalike host would pass, so
+   * the BYOK reader additionally gates this on an exact hostname — the field is
+   * only produced for a real Vercel AI Gateway endpoint.
+   * @see https://vercel.com/docs/ai-gateway/models-and-providers#provider-routing
+   */
+  vercelGatewayRouting?: VercelGatewayRouting;
 }
 
 export interface LocalModelConfig extends Omit<
@@ -216,8 +240,7 @@ export interface LocalModelResolverOptions {
     loginEpoch?: string,
   ) => void | Promise<void>;
   readonly routingContextGetter?: () =>
-    | import('@mavis/agent-tools/desktop').ManagedBackendRoutingContext
-    | undefined;
+    import('@mavis/agent-tools/desktop').ManagedBackendRoutingContext | undefined;
   readonly providerAuthGetter?: (
     provider: string,
   ) => Promise<string | undefined> | string | undefined;
@@ -364,8 +387,7 @@ export interface DiscoveredModel {
 }
 
 export type ModelDiscoveryResult =
-  | { ok: true; models: DiscoveredModel[] }
-  | { ok: false; errorCode: string; errorMessage: string };
+  { ok: true; models: DiscoveredModel[] } | { ok: false; errorCode: string; errorMessage: string };
 
 export interface ModelDiscoveryClientLike {
   discover(target: ModelDiscoveryTarget): Promise<ModelDiscoveryResult>;
