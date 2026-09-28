@@ -62,8 +62,13 @@ export interface LocalModelCompatOverrides {
   cacheControlFormat?: 'anthropic';
   /**
    * OpenRouter provider routing preferences, sent as the request `provider`
-   * field. The pi transport already honors this; it only becomes reachable
-   * once the BYOK reader stops dropping it. Ignored by other providers.
+   * field.
+   *
+   * The pi openai-completions transport attaches this whenever it is present,
+   * for any endpoint on that transport — it does not check the base URL, unlike
+   * the Vercel gateway routing beside it. Set it only on models served by
+   * OpenRouter: other OpenAI-compatible gateways receive the extra `provider`
+   * field in the request body.
    * @see https://openrouter.ai/docs/guides/routing/provider-selection
    */
   openRouterRouting?: OpenRouterRouting;
