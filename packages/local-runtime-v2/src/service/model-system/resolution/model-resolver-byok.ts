@@ -246,13 +246,20 @@ function readNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+/** A decimal number, optionally signed and optionally in exponent form. */
+const NUMERIC_STRING = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
 /**
  * Reads a numeric-or-string money field (`max_price.*`). OpenRouter accepts both
  * a number and a decimal string here, so the declared type is a union.
+ *
+ * The string form must still be a number. Accepting any non-empty string would
+ * forward values like `"free"` or `"$5"` as a price ceiling, which is exactly
+ * the kind of unvalidated shape this reader exists to keep out of the request.
  */
 function readNumberish(value: unknown): number | string | undefined {
   if (typeof value === 'number') return readNumber(value);
-  if (typeof value === 'string' && value.trim() !== '') return value;
+  if (typeof value === 'string' && NUMERIC_STRING.test(value.trim())) return value.trim();
   return undefined;
 }
 
@@ -292,8 +299,11 @@ const DATA_COLLECTIONS = ['allow', 'deny'] as const;
 
 /**
  * Reads `sort`, which OpenRouter accepts either as a bare strategy name or as
- * `{ by, partition }`. A malformed `by`/`partition` drops the whole object
- * rather than forwarding a partial sort, which OpenRouter would reject.
+ * `{ by, partition }`.
+ *
+ * The object form is validated atomically: if a key that is *present* fails
+ * validation the whole object is dropped, so a partial sort is never forwarded
+ * as a routing override. Unknown keys are ignored, as everywhere else.
  */
 function readRoutingSort(
   value: unknown,
@@ -304,13 +314,19 @@ function readRoutingSort(
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const source = value as Record<string, unknown>;
   const sort: { by?: string; partition?: string | null } = {};
-  const by = readCompatEnum(source.by, ROUTING_SORT_BYS);
-  if (by) sort.by = by;
-  if (source.partition === null) {
-    sort.partition = null;
-  } else {
-    const partition = readCompatEnum(source.partition, ROUTING_PARTITIONS);
-    if (partition) sort.partition = partition;
+  if (source.by !== undefined) {
+    const by = readCompatEnum(source.by, ROUTING_SORT_BYS);
+    if (!by) return undefined;
+    sort.by = by;
+  }
+  if (source.partition !== undefined) {
+    if (source.partition === null) {
+      sort.partition = null;
+    } else {
+      const partition = readCompatEnum(source.partition, ROUTING_PARTITIONS);
+      if (!partition) return undefined;
+      sort.partition = partition;
+    }
   }
   return sort.by || sort.partition !== undefined ? sort : undefined;
 }

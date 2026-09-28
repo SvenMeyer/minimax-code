@@ -387,6 +387,47 @@ describe('custom BYOK compat overrides', () => {
     expect(planWithCompat('{"compat":{"openRouterRouting":{"only":[]}}}')).toBeUndefined();
   });
 
+  it('drops a price that is a non-numeric string rather than forwarding it', () => {
+    // "free" / "$5" are strings, but not prices; forwarding them as a ceiling
+    // would send a malformed provider override to OpenRouter.
+    expect(
+      planWithCompat(
+        '{"compat":{"openRouterRouting":{"max_price":{"prompt":"free","completion":1}}}}',
+      ),
+    ).toEqual({ openRouterRouting: { max_price: { completion: 1 } } });
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"max_price":{"prompt":"$5"}}}}'),
+    ).toBeUndefined();
+  });
+
+  it('keeps decimal and exponent price strings', () => {
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"max_price":{"prompt":"0.000002"}}}}'),
+    ).toEqual({ openRouterRouting: { max_price: { prompt: '0.000002' } } });
+  });
+
+  it('drops the whole sort object when a present member is malformed', () => {
+    // Atomic: {by: "price", partition: 42} must not become {by: "price"}.
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"sort":{"by":"price","partition":42}}}}'),
+    ).toBeUndefined();
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"sort":{"by":"nope"}}}}'),
+    ).toBeUndefined();
+  });
+
+  it('keeps a sort object whose present members all validate', () => {
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"sort":{"by":"price","partition":null}}}}'),
+    ).toEqual({ openRouterRouting: { sort: { by: 'price', partition: null } } });
+  });
+
+  it('ignores unknown sort keys instead of invalidating it', () => {
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"sort":{"by":"latency","bogus":true}}}}'),
+    ).toEqual({ openRouterRouting: { sort: { by: 'latency' } } });
+  });
+
   it('drops non-record routing values', () => {
     expect(planWithCompat('{"compat":{"openRouterRouting":[]}}')).toBeUndefined();
     expect(planWithCompat('{"compat":{"openRouterRouting":"only"}}')).toBeUndefined();
