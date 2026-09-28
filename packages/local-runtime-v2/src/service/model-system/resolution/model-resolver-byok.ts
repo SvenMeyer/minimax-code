@@ -1,4 +1,4 @@
-import type { Api, OpenRouterRouting } from '@earendil-works/pi-ai';
+import type { Api, OpenRouterRouting, VercelGatewayRouting } from '@earendil-works/pi-ai';
 import { minimaxApiModels, getRuntimeRegion } from '@mavis/config';
 
 import type {
@@ -320,6 +320,30 @@ const ROUTING_BOOLEAN_KEYS = [
 const ROUTING_LIST_KEYS = ['order', 'only', 'ignore', 'quantizations'] as const;
 const ROUTING_PERCENTILE_KEYS = ['preferred_min_throughput', 'preferred_max_latency'] as const;
 const DATA_COLLECTIONS = ['allow', 'deny'] as const;
+const VERCEL_ROUTING_LIST_KEYS = ['only', 'order'] as const;
+
+/**
+ * Reads `compat.vercelGatewayRouting` out of untrusted provider config.
+ *
+ * `VercelGatewayRouting` declares exactly `only` and `order`, both `string[]`,
+ * and the transport reads only those two before building
+ * `providerOptions.gateway` — so keeping to the declared keys is both the
+ * contract and the whole of what can have an effect.
+ *
+ * Unlike {@link readOpenRouterRouting}, no endpoint concern applies: the
+ * transport already gates this on the base URL, so a value set on a
+ * non-Vercel provider is inert rather than leaked.
+ */
+function readVercelGatewayRouting(value: unknown): VercelGatewayRouting | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const routing: VercelGatewayRouting = {};
+  for (const key of VERCEL_ROUTING_LIST_KEYS) {
+    const list = readStringList(source[key]);
+    if (list) routing[key] = list;
+  }
+  return Object.keys(routing).length > 0 ? routing : undefined;
+}
 
 /**
  * A non-empty strategy string, for `sort` / `sort.by` / `sort.partition`.
@@ -438,6 +462,8 @@ function readModelCompat(value: unknown): LocalModelCompatOverrides | undefined 
   if (cacheControlFormat) compat.cacheControlFormat = cacheControlFormat;
   const openRouterRouting = readOpenRouterRouting(source.openRouterRouting);
   if (openRouterRouting) compat.openRouterRouting = openRouterRouting;
+  const vercelGatewayRouting = readVercelGatewayRouting(source.vercelGatewayRouting);
+  if (vercelGatewayRouting) compat.vercelGatewayRouting = vercelGatewayRouting;
   return Object.keys(compat).length > 0 ? compat : undefined;
 }
 
