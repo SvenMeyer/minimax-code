@@ -329,12 +329,14 @@ const DATA_COLLECTIONS = ['allow', 'deny'] as const;
 const VERCEL_ROUTING_LIST_KEYS = ['only', 'order'] as const;
 const VERCEL_GATEWAY_HOST = 'ai-gateway.vercel.sh';
 
-/** Hostname of a base URL, tolerating a missing scheme. */
+/** Hostname of a base URL, tolerating a missing scheme and a trailing-dot FQDN. */
 function hostnameOf(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(value) ? value : `https://${value}`;
   try {
-    return new URL(withScheme).hostname.toLowerCase();
+    // A single trailing dot is the DNS root label and names the same host, so
+    // `ai-gateway.vercel.sh.` must not be treated as a different endpoint.
+    return new URL(withScheme).hostname.toLowerCase().replace(/\.$/u, '');
   } catch {
     return undefined;
   }
@@ -374,9 +376,11 @@ function restrictRoutingToEndpoint(
  * `providerOptions.gateway` — so keeping to the declared keys is both the
  * contract and the whole of what can have an effect.
  *
- * Unlike {@link readOpenRouterRouting}, no endpoint concern applies: the
- * transport already gates this on the base URL, so a value set on a
- * non-Vercel provider is inert rather than leaked.
+ * This function does not decide the endpoint. {@link restrictRoutingToEndpoint}
+ * does, and it is load-bearing rather than defensive: the transport's own check
+ * is a substring test (`baseUrl.includes("ai-gateway.vercel.sh")`) that a
+ * lookalike host passes, so removing that gate would let Vercel-only body fields
+ * reach a host that merely looks Vercel. Do not drop it as redundant.
  */
 function readVercelGatewayRouting(value: unknown): VercelGatewayRouting | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;

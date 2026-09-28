@@ -612,6 +612,24 @@ describe('custom BYOK compat overrides', () => {
     ).toEqual({ vercelGatewayRouting: { only: ['bedrock'] } });
   });
 
+  it('treats a trailing-dot FQDN as the same host', () => {
+    // `ai-gateway.vercel.sh.` is the DNS root-label form of the same name, so it
+    // must not be dropped as if it were a lookalike — the transport's substring
+    // check accepts it, and refusing here would silently discard routing.
+    expect(
+      planWithCompatAt(
+        'https://ai-gateway.vercel.sh./v1',
+        '{"compat":{"vercelGatewayRouting":{"only":["bedrock"]}}}',
+      ),
+    ).toEqual({ vercelGatewayRouting: { only: ['bedrock'] } });
+    expect(
+      planWithCompatAt(
+        'AI-GATEWAY.VERCEL.SH/v1',
+        '{"compat":{"vercelGatewayRouting":{"only":["bedrock"]}}}',
+      ),
+    ).toEqual({ vercelGatewayRouting: { only: ['bedrock'] } });
+  });
+
   it('leaves OpenRouter routing ungated by the endpoint', () => {
     // Unlike the Vercel field, the transport applies this one for any endpoint,
     // so the reader must not quietly drop it on a non-OpenRouter host.

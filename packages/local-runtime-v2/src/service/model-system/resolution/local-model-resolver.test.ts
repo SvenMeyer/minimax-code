@@ -1607,19 +1607,24 @@ describe('LocalModelResolver custom provider session affinity', () => {
     expect(headers['x-session-affinity']).toBeUndefined();
   });
 
-  // The routing reader exists to get a value onto the wire, so this pins the
+  // The routing readers exist to get a value onto the wire, so these pin the
   // request pi would actually send rather than the resolved compat in between.
-  // Without it, a regression after readModelCompat() would leave every reader
+  // Without them a regression after readModelCompat() would leave every reader
   // test green while BYOK routing is still omitted from the request.
-  const providerRoutingFor = async (compat: LocalModelConfig['compat']) => {
-    const modelConfig: LocalModelConfig = compat ? { compat } : {};
+  const routingPayloadFor = async (input: {
+    providerKey: string;
+    baseURL: string;
+    modelId: string;
+    compat: LocalModelConfig['compat'];
+  }) => {
+    const modelConfig: LocalModelConfig = input.compat ? { compat: input.compat } : {};
     const resolver = new LocalModelResolver({
       byokConfigGetter: () => ({
         custom_provider: {
-          openrouter: {
+          [input.providerKey]: {
             api: 'openai-completions',
-            options: { apiKey: 'or-key', baseURL: 'https://openrouter.ai/api/v1' },
-            models: { 'deepseek/deepseek-v4.1-flash': modelConfig },
+            options: { apiKey: 'route-key', baseURL: input.baseURL },
+            models: { [input.modelId]: modelConfig },
           },
         },
       }),
@@ -1629,15 +1634,11 @@ describe('LocalModelResolver custom provider session affinity', () => {
       turnId: 'turn-routing-wire',
       agentConfig: {
         ...AGENT_CONFIG,
-        model: modelRefForModel(
-          'custom_provider:openrouter',
-          'deepseek/deepseek-v4.1-flash',
-          modelConfig,
-        ),
+        model: modelRefForModel(`custom_provider:${input.providerKey}`, input.modelId, modelConfig),
       },
     });
 
-    let payload: { provider?: unknown } = {};
+    let payload: { provider?: unknown; providerOptions?: unknown } = {};
     await streamSimple(
       resolved.model,
       {
@@ -1645,16 +1646,37 @@ describe('LocalModelResolver custom provider session affinity', () => {
         messages: [{ role: 'user', content: 'Hi', timestamp: Date.now() }],
       },
       {
-        apiKey: 'or-key',
+        apiKey: 'route-key',
         onPayload: (params: unknown) => {
-          payload = params as { provider?: unknown };
+          payload = params as { provider?: unknown; providerOptions?: unknown };
         },
         // The payload is captured before transport, so the request never leaves the test.
         fetch: (() => Promise.reject(new Error('offline'))) as typeof globalThis.fetch,
       },
     ).result();
-    return payload.provider;
+    return payload;
   };
+
+  const providerRoutingFor = async (compat: LocalModelConfig['compat']) =>
+    (
+      await routingPayloadFor({
+        providerKey: 'openrouter',
+        baseURL: 'https://openrouter.ai/api/v1',
+        modelId: 'deepseek/deepseek-v4.1-flash',
+        compat,
+      })
+    ).provider;
+
+  const vercelRoutingFor = async (
+    compat: LocalModelConfig['compat'],
+    baseURL = 'https://ai-gateway.vercel.sh/v1',
+  ) =>
+    routingPayloadFor({
+      providerKey: 'vercel',
+      baseURL,
+      modelId: 'anthropic/claude',
+      compat,
+    });
 
   it('sends OpenRouter routing preferences as the request provider field', async () => {
     expect(
@@ -1671,49 +1693,6 @@ describe('LocalModelResolver custom provider session affinity', () => {
 
   // The Vercel keys take a different route: the transport gates them on the base
   // URL and builds `providerOptions.gateway`, so this pins that separate path.
-  const vercelRoutingFor = async (
-    compat: LocalModelConfig['compat'],
-    baseURL = 'https://ai-gateway.vercel.sh/v1',
-  ) => {
-    const modelConfig: LocalModelConfig = compat ? { compat } : {};
-    const resolver = new LocalModelResolver({
-      byokConfigGetter: () => ({
-        custom_provider: {
-          vercel: {
-            api: 'openai-completions',
-            options: { apiKey: 'vc-key', baseURL },
-            models: { 'anthropic/claude': modelConfig },
-          },
-        },
-      }),
-    });
-    const resolved = await resolver.resolveModel({
-      sessionId: 'session-vercel-wire',
-      turnId: 'turn-vercel-wire',
-      agentConfig: {
-        ...AGENT_CONFIG,
-        model: modelRefForModel('custom_provider:vercel', 'anthropic/claude', modelConfig),
-      },
-    });
-
-    let payload: { provider?: unknown; providerOptions?: unknown } = {};
-    await streamSimple(
-      resolved.model,
-      {
-        systemPrompt: 'Follow instructions.',
-        messages: [{ role: 'user', content: 'Hi', timestamp: Date.now() }],
-      },
-      {
-        apiKey: 'vc-key',
-        onPayload: (params: unknown) => {
-          payload = params as { provider?: unknown; providerOptions?: unknown };
-        },
-        fetch: (() => Promise.reject(new Error('offline'))) as typeof globalThis.fetch,
-      },
-    ).result();
-    return payload;
-  };
-
   it('sends Vercel gateway routing as providerOptions.gateway', async () => {
     const payload = await vercelRoutingFor({
       vercelGatewayRouting: { only: ['bedrock', 'anthropic'], order: ['anthropic'] },
