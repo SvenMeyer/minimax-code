@@ -260,26 +260,45 @@ function readNumberish(value: unknown): number | string | undefined {
   return undefined;
 }
 
-/** Reads `{ prompt?, completion?, image?, audio?, request? }` price ceilings. */
+const MAX_PRICE_KEYS = ['prompt', 'completion', 'image', 'audio', 'request'] as const;
+const PERCENTILE_KEYS = ['p50', 'p75', 'p90', 'p99'] as const;
+
+/**
+ * Reads `{ prompt?, completion?, image?, audio?, request? }` price ceilings.
+ *
+ * Iterates the known keys rather than the object's own entries: an unrecognised
+ * key is not a declared field, so it must not ride along into the request. This
+ * is the same rule the scalar reader applies, and it is what keeps a
+ * non-OpenRouter shape from being forwarded as a routing override.
+ */
 function readMaxPrice(value: unknown): Record<string, number | string> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const entries = Object.entries(value)
-    .map(([key, raw]) => [key, readNumberish(raw)] as const)
-    .filter((entry): entry is readonly [string, number | string] => entry[1] !== undefined);
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  const source = value as Record<string, unknown>;
+  const maxPrice: Record<string, number | string> = {};
+  for (const key of MAX_PRICE_KEYS) {
+    const candidate = readNumberish(source[key]);
+    if (candidate !== undefined) maxPrice[key] = candidate;
+  }
+  return Object.keys(maxPrice).length > 0 ? maxPrice : undefined;
 }
 
 /**
  * Reads a percentile cutoff map (`p50`, `p75`, `p90`, `p99`), used by the
  * `preferred_min_throughput` / `preferred_max_latency` fields. These accept a
  * bare number as well, but the object form is numeric-only.
+ *
+ * Known-keys-only, for the same reason as {@link readMaxPrice}: a percentile
+ * outside the declared set is not a field OpenRouter accepts.
  */
 function readPercentiles(value: unknown): Record<string, number> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const entries = Object.entries(value)
-    .map(([key, raw]) => [key, readNumber(raw)] as const)
-    .filter((entry): entry is readonly [string, number] => entry[1] !== undefined);
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  const source = value as Record<string, unknown>;
+  const percentiles: Record<string, number> = {};
+  for (const key of PERCENTILE_KEYS) {
+    const candidate = readNumber(source[key]);
+    if (candidate !== undefined) percentiles[key] = candidate;
+  }
+  return Object.keys(percentiles).length > 0 ? percentiles : undefined;
 }
 
 const ROUTING_BOOLEAN_KEYS = [
