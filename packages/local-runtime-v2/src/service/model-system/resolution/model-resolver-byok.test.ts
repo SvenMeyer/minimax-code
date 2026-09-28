@@ -372,6 +372,21 @@ describe('custom BYOK compat overrides', () => {
     ).toEqual({ openRouterRouting: { zdr: true } });
   });
 
+  it('rejects a mixed provider list instead of filtering it down', () => {
+    // A shrunk list would silently pin/order/exclude a different provider set
+    // than the one written, so the whole key is dropped.
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"only":["DeepSeek",42]}}}'),
+    ).toBeUndefined();
+    expect(
+      planWithCompat('{"compat":{"openRouterRouting":{"order":["DeepInfra",null],"zdr":true}}}'),
+    ).toEqual({ openRouterRouting: { zdr: true } });
+  });
+
+  it('rejects an empty provider list', () => {
+    expect(planWithCompat('{"compat":{"openRouterRouting":{"only":[]}}}')).toBeUndefined();
+  });
+
   it('drops non-record routing values', () => {
     expect(planWithCompat('{"compat":{"openRouterRouting":[]}}')).toBeUndefined();
     expect(planWithCompat('{"compat":{"openRouterRouting":"only"}}')).toBeUndefined();
