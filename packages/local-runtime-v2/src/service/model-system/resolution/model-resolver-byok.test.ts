@@ -530,4 +530,43 @@ describe('custom BYOK compat overrides', () => {
   it('leaves routing absent so no provider field is sent by default', () => {
     expect(planWithCompat('{"compat":{"supportsStore":false}}')).toEqual({ supportsStore: false });
   });
+
+  it('keeps Vercel gateway routing and nothing else', () => {
+    expect(
+      planWithCompat(
+        '{"compat":{"vercelGatewayRouting":{"only":["bedrock","anthropic"],"order":["anthropic"],"bogus":["x"]}}}',
+      ),
+    ).toEqual({
+      vercelGatewayRouting: { only: ['bedrock', 'anthropic'], order: ['anthropic'] },
+    });
+  });
+
+  it('applies the list rules to Vercel routing', () => {
+    // Same list semantics as the OpenRouter keys: a mixed or padded list is not
+    // silently shrunk, and a sibling left valid survives.
+    expect(
+      planWithCompat('{"compat":{"vercelGatewayRouting":{"only":["bedrock",42]}}}'),
+    ).toBeUndefined();
+    expect(
+      planWithCompat('{"compat":{"vercelGatewayRouting":{"only":[""],"order":["anthropic"]}}}'),
+    ).toEqual({ vercelGatewayRouting: { order: ['anthropic'] } });
+    expect(planWithCompat('{"compat":{"vercelGatewayRouting":{"only":[]}}}')).toBeUndefined();
+  });
+
+  it('drops Vercel routing when it is not a record of usable keys', () => {
+    expect(planWithCompat('{"compat":{"vercelGatewayRouting":[]}}')).toBeUndefined();
+    expect(planWithCompat('{"compat":{"vercelGatewayRouting":"only"}}')).toBeUndefined();
+    expect(planWithCompat('{"compat":{"vercelGatewayRouting":{"bogus":["x"]}}}')).toBeUndefined();
+  });
+
+  it('carries both routing dialects at once without cross-talk', () => {
+    expect(
+      planWithCompat(
+        '{"compat":{"openRouterRouting":{"only":["DeepSeek"]},"vercelGatewayRouting":{"order":["anthropic"]}}}',
+      ),
+    ).toEqual({
+      openRouterRouting: { only: ['DeepSeek'] },
+      vercelGatewayRouting: { order: ['anthropic'] },
+    });
+  });
 });

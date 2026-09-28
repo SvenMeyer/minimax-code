@@ -1668,4 +1668,77 @@ describe('LocalModelResolver custom provider session affinity', () => {
     expect(await providerRoutingFor(undefined)).toBeUndefined();
     expect(await providerRoutingFor({ supportsStrictMode: false })).toBeUndefined();
   });
+
+  // The Vercel keys take a different route: the transport gates them on the base
+  // URL and builds `providerOptions.gateway`, so this pins that separate path.
+  const vercelRoutingFor = async (
+    compat: LocalModelConfig['compat'],
+    baseURL = 'https://ai-gateway.vercel.sh/v1',
+  ) => {
+    const modelConfig: LocalModelConfig = compat ? { compat } : {};
+    const resolver = new LocalModelResolver({
+      byokConfigGetter: () => ({
+        custom_provider: {
+          vercel: {
+            api: 'openai-completions',
+            options: { apiKey: 'vc-key', baseURL },
+            models: { 'anthropic/claude': modelConfig },
+          },
+        },
+      }),
+    });
+    const resolved = await resolver.resolveModel({
+      sessionId: 'session-vercel-wire',
+      turnId: 'turn-vercel-wire',
+      agentConfig: {
+        ...AGENT_CONFIG,
+        model: modelRefForModel('custom_provider:vercel', 'anthropic/claude', modelConfig),
+      },
+    });
+
+    let payload: { provider?: unknown; providerOptions?: unknown } = {};
+    await streamSimple(
+      resolved.model,
+      {
+        systemPrompt: 'Follow instructions.',
+        messages: [{ role: 'user', content: 'Hi', timestamp: Date.now() }],
+      },
+      {
+        apiKey: 'vc-key',
+        onPayload: (params: unknown) => {
+          payload = params as { provider?: unknown; providerOptions?: unknown };
+        },
+        fetch: (() => Promise.reject(new Error('offline'))) as typeof globalThis.fetch,
+      },
+    ).result();
+    return payload;
+  };
+
+  it('sends Vercel gateway routing as providerOptions.gateway', async () => {
+    const payload = await vercelRoutingFor({
+      vercelGatewayRouting: { only: ['bedrock', 'anthropic'], order: ['anthropic'] },
+    });
+
+    expect(payload.providerOptions).toEqual({
+      gateway: { only: ['bedrock', 'anthropic'], order: ['anthropic'] },
+    });
+    // The OpenRouter field is not a Vercel field, and must stay out of it.
+    expect(payload.provider).toBeUndefined();
+  });
+
+  it('does not send Vercel gateway options off the Vercel host', async () => {
+    // The transport gates on the base URL, so the same config is inert elsewhere.
+    const payload = await vercelRoutingFor(
+      { vercelGatewayRouting: { only: ['bedrock'] } },
+      'https://gateway.example/v1',
+    );
+
+    expect(payload.providerOptions).toBeUndefined();
+  });
+
+  it('omits providerOptions.gateway when no Vercel routing is configured', async () => {
+    const payload = await vercelRoutingFor(undefined);
+
+    expect(payload.providerOptions).toBeUndefined();
+  });
 });
