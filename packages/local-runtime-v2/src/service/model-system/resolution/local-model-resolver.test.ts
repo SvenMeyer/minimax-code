@@ -1513,20 +1513,12 @@ describe('LocalModelResolver custom provider compat overrides', () => {
     'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
     'https://example-workspace.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1',
   ])('honors an explicit developer-role override on %s', async (baseURL) => {
-    expect(
-      await systemPromptRoleFor(
-        { supportsDeveloperRole: true },
-        baseURL,
-      ),
-    ).toBe('developer');
+    expect(await systemPromptRoleFor({ supportsDeveloperRole: true }, baseURL)).toBe('developer');
   });
 
   it('honors an explicit developer-role override on a Kimi Coding endpoint', async () => {
     expect(
-      await systemPromptRoleFor(
-        { supportsDeveloperRole: true },
-        'https://api.kimi.com/coding/v1',
-      ),
+      await systemPromptRoleFor({ supportsDeveloperRole: true }, 'https://api.kimi.com/coding/v1'),
     ).toBe('developer');
   });
 });
@@ -1547,10 +1539,7 @@ describe('LocalModelResolver custom provider session affinity', () => {
     );
   };
 
-  const requestFor = async (
-    compat: LocalModelConfig['compat'],
-    cacheRetention?: 'none',
-  ) => {
+  const requestFor = async (compat: LocalModelConfig['compat'], cacheRetention?: 'none') => {
     const modelConfig: LocalModelConfig = compat ? { compat } : {};
     const resolver = new LocalModelResolver({
       byokConfigGetter: () => ({
@@ -1616,5 +1605,67 @@ describe('LocalModelResolver custom provider session affinity', () => {
     const { headers } = await requestFor({ sendSessionAffinityHeaders: true }, 'none');
 
     expect(headers['x-session-affinity']).toBeUndefined();
+  });
+
+  // The routing reader exists to get a value onto the wire, so this pins the
+  // request pi would actually send rather than the resolved compat in between.
+  // Without it, a regression after readModelCompat() would leave every reader
+  // test green while BYOK routing is still omitted from the request.
+  const providerRoutingFor = async (compat: LocalModelConfig['compat']) => {
+    const modelConfig: LocalModelConfig = compat ? { compat } : {};
+    const resolver = new LocalModelResolver({
+      byokConfigGetter: () => ({
+        custom_provider: {
+          openrouter: {
+            api: 'openai-completions',
+            options: { apiKey: 'or-key', baseURL: 'https://openrouter.ai/api/v1' },
+            models: { 'deepseek/deepseek-v4.1-flash': modelConfig },
+          },
+        },
+      }),
+    });
+    const resolved = await resolver.resolveModel({
+      sessionId: 'session-routing-wire',
+      turnId: 'turn-routing-wire',
+      agentConfig: {
+        ...AGENT_CONFIG,
+        model: modelRefForModel(
+          'custom_provider:openrouter',
+          'deepseek/deepseek-v4.1-flash',
+          modelConfig,
+        ),
+      },
+    });
+
+    let payload: { provider?: unknown } = {};
+    await streamSimple(
+      resolved.model,
+      {
+        systemPrompt: 'Follow instructions.',
+        messages: [{ role: 'user', content: 'Hi', timestamp: Date.now() }],
+      },
+      {
+        apiKey: 'or-key',
+        onPayload: (params: unknown) => {
+          payload = params as { provider?: unknown };
+        },
+        // The payload is captured before transport, so the request never leaves the test.
+        fetch: (() => Promise.reject(new Error('offline'))) as typeof globalThis.fetch,
+      },
+    ).result();
+    return payload.provider;
+  };
+
+  it('sends OpenRouter routing preferences as the request provider field', async () => {
+    expect(
+      await providerRoutingFor({
+        openRouterRouting: { only: ['DeepSeek'], allow_fallbacks: false },
+      }),
+    ).toEqual({ only: ['DeepSeek'], allow_fallbacks: false });
+  });
+
+  it('omits the provider field when no OpenRouter routing is configured', async () => {
+    expect(await providerRoutingFor(undefined)).toBeUndefined();
+    expect(await providerRoutingFor({ supportsStrictMode: false })).toBeUndefined();
   });
 });

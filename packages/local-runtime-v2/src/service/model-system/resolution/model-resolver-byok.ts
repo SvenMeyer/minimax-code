@@ -253,14 +253,17 @@ const NUMERIC_STRING = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
  * Reads a numeric-or-string money field (`max_price.*`). OpenRouter accepts both
  * a number and a decimal string here, so the declared type is a union.
  *
- * The string form must still be a number. Accepting any non-empty string would
- * forward values like `"free"` or `"$5"` as a price ceiling, which is exactly
- * the kind of unvalidated shape this reader exists to keep out of the request.
+ * The string form must still be a usable number. Accepting any non-empty string
+ * would forward values like `"free"` or `"$5"` as a price ceiling, and accepting
+ * the exponent form unchecked would forward `"1e999"`, which parses to
+ * `Infinity` — the same non-finite value the numeric branch rejects.
  */
 function readNumberish(value: unknown): number | string | undefined {
   if (typeof value === 'number') return readNumber(value);
-  if (typeof value === 'string' && NUMERIC_STRING.test(value.trim())) return value.trim();
-  return undefined;
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!NUMERIC_STRING.test(trimmed) || !Number.isFinite(Number(trimmed))) return undefined;
+  return trimmed;
 }
 
 const MAX_PRICE_KEYS = ['prompt', 'completion', 'image', 'audio', 'request'] as const;
@@ -312,9 +315,21 @@ const ROUTING_BOOLEAN_KEYS = [
 ] as const;
 const ROUTING_LIST_KEYS = ['order', 'only', 'ignore', 'quantizations'] as const;
 const ROUTING_PERCENTILE_KEYS = ['preferred_min_throughput', 'preferred_max_latency'] as const;
-const ROUTING_SORT_BYS = ['price', 'throughput', 'latency'] as const;
-const ROUTING_PARTITIONS = ['model', 'none'] as const;
 const DATA_COLLECTIONS = ['allow', 'deny'] as const;
+
+/**
+ * A non-empty strategy string, for `sort` / `sort.by` / `sort.partition`.
+ *
+ * The declared contract is plain `string` — pi documents `price`, `throughput`
+ * and `latency` as examples ("e.g."), not as an exhaustive union — so this
+ * checks the type and rejects only the empty string. Narrowing to the examples
+ * would silently drop a strategy the shared type permits and pi forwards.
+ */
+function readStrategy(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
 
 /**
  * Reads `sort`, which OpenRouter accepts either as a bare strategy name or as
@@ -327,14 +342,14 @@ const DATA_COLLECTIONS = ['allow', 'deny'] as const;
 function readRoutingSort(
   value: unknown,
 ): string | { by?: string; partition?: string | null } | undefined {
-  if (typeof value === 'string') {
-    return ROUTING_SORT_BYS.find((option) => option === value);
-  }
+  const bare = readStrategy(value);
+  if (bare) return bare;
+  if (typeof value === 'string') return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const source = value as Record<string, unknown>;
   const sort: { by?: string; partition?: string | null } = {};
   if (source.by !== undefined) {
-    const by = readCompatEnum(source.by, ROUTING_SORT_BYS);
+    const by = readStrategy(source.by);
     if (!by) return undefined;
     sort.by = by;
   }
@@ -342,7 +357,7 @@ function readRoutingSort(
     if (source.partition === null) {
       sort.partition = null;
     } else {
-      const partition = readCompatEnum(source.partition, ROUTING_PARTITIONS);
+      const partition = readStrategy(source.partition);
       if (!partition) return undefined;
       sort.partition = partition;
     }
