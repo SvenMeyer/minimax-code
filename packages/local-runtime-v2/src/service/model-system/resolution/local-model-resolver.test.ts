@@ -1638,7 +1638,7 @@ describe('LocalModelResolver custom provider session affinity', () => {
       },
     });
 
-    let payload: { provider?: unknown; providerOptions?: unknown } = {};
+    let payload: { provider?: unknown; providerOptions?: unknown } | undefined;
     await streamSimple(
       resolved.model,
       {
@@ -1654,6 +1654,12 @@ describe('LocalModelResolver custom provider session affinity', () => {
         fetch: (() => Promise.reject(new Error('offline'))) as typeof globalThis.fetch,
       },
     ).result();
+    // Absence assertions below are only meaningful if a payload was actually
+    // captured: with an uncaptured payload every `toBeUndefined()` on it would
+    // pass for the wrong reason, so fail loudly rather than report green.
+    if (!payload) {
+      throw new Error('onPayload captured nothing; an absence assertion would be vacuous.');
+    }
     return payload;
   };
 
