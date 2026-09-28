@@ -1,4 +1,4 @@
-import type { Api } from '@earendil-works/pi-ai';
+import type { Api, OpenRouterRouting } from '@earendil-works/pi-ai';
 import { minimaxApiModels, getRuntimeRegion } from '@mavis/config';
 
 import type {
@@ -220,6 +220,122 @@ function readCompatEnum<T extends string>(value: unknown, allowed: readonly T[])
   return typeof value === 'string' ? allowed.find((option) => option === value) : undefined;
 }
 
+/** Keeps only the string entries of a list-shaped routing key. */
+function readStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries = value.filter((entry): entry is string => typeof entry === 'string');
+  return entries.length > 0 ? entries : undefined;
+}
+
+/** Reads a finite number, dropping NaN/Infinity that JSON cannot legitimately carry. */
+function readNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Reads a numeric-or-string money field (`max_price.*`). OpenRouter accepts both
+ * a number and a decimal string here, so the declared type is a union.
+ */
+function readNumberish(value: unknown): number | string | undefined {
+  if (typeof value === 'number') return readNumber(value);
+  if (typeof value === 'string' && value.trim() !== '') return value;
+  return undefined;
+}
+
+/** Reads `{ prompt?, completion?, image?, audio?, request? }` price ceilings. */
+function readMaxPrice(value: unknown): Record<string, number | string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value)
+    .map(([key, raw]) => [key, readNumberish(raw)] as const)
+    .filter((entry): entry is readonly [string, number | string] => entry[1] !== undefined);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+/**
+ * Reads a percentile cutoff map (`p50`, `p75`, `p90`, `p99`), used by the
+ * `preferred_min_throughput` / `preferred_max_latency` fields. These accept a
+ * bare number as well, but the object form is numeric-only.
+ */
+function readPercentiles(value: unknown): Record<string, number> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value)
+    .map(([key, raw]) => [key, readNumber(raw)] as const)
+    .filter((entry): entry is readonly [string, number] => entry[1] !== undefined);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+const ROUTING_BOOLEAN_KEYS = [
+  'allow_fallbacks',
+  'require_parameters',
+  'zdr',
+  'enforce_distillable_text',
+] as const;
+const ROUTING_LIST_KEYS = ['order', 'only', 'ignore', 'quantizations'] as const;
+const ROUTING_PERCENTILE_KEYS = ['preferred_min_throughput', 'preferred_max_latency'] as const;
+const ROUTING_SORT_BYS = ['price', 'throughput', 'latency'] as const;
+const ROUTING_PARTITIONS = ['model', 'none'] as const;
+const DATA_COLLECTIONS = ['allow', 'deny'] as const;
+
+/**
+ * Reads `sort`, which OpenRouter accepts either as a bare strategy name or as
+ * `{ by, partition }`. A malformed `by`/`partition` drops the whole object
+ * rather than forwarding a partial sort, which OpenRouter would reject.
+ */
+function readRoutingSort(
+  value: unknown,
+): string | { by?: string; partition?: string | null } | undefined {
+  if (typeof value === 'string') {
+    return ROUTING_SORT_BYS.find((option) => option === value);
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const sort: { by?: string; partition?: string | null } = {};
+  const by = readCompatEnum(source.by, ROUTING_SORT_BYS);
+  if (by) sort.by = by;
+  if (source.partition === null) {
+    sort.partition = null;
+  } else {
+    const partition = readCompatEnum(source.partition, ROUTING_PARTITIONS);
+    if (partition) sort.partition = partition;
+  }
+  return sort.by || sort.partition !== undefined ? sort : undefined;
+}
+
+/**
+ * Read `compat.openRouterRouting` out of untrusted provider config.
+ *
+ * The object is forwarded verbatim to OpenRouter as the request `provider`
+ * field, so every key is validated at its declared type and anything unknown or
+ * malformed is dropped. A rejected key never invalidates its valid siblings,
+ * and an object left with no usable keys is dropped entirely so an empty
+ * `provider` object is never sent.
+ */
+function readOpenRouterRouting(value: unknown): OpenRouterRouting | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const source: Record<string, unknown> = { ...value };
+  const routing: OpenRouterRouting = {};
+  for (const key of ROUTING_BOOLEAN_KEYS) {
+    const candidate = source[key];
+    if (typeof candidate === 'boolean') routing[key] = candidate;
+  }
+  const dataCollection = readCompatEnum(source.data_collection, DATA_COLLECTIONS);
+  if (dataCollection) routing.data_collection = dataCollection;
+  for (const key of ROUTING_LIST_KEYS) {
+    const list = readStringList(source[key]);
+    if (list) routing[key] = list;
+  }
+  const sort = readRoutingSort(source.sort);
+  if (sort) routing.sort = sort;
+  const maxPrice = readMaxPrice(source.max_price);
+  if (maxPrice) routing.max_price = maxPrice;
+  for (const key of ROUTING_PERCENTILE_KEYS) {
+    // A bare number is valid on its own; the object form needs the map reader.
+    const percentiles = readPercentiles(source[key]) ?? readNumber(source[key]);
+    if (percentiles !== undefined) routing[key] = percentiles;
+  }
+  return Object.keys(routing).length > 0 ? routing : undefined;
+}
+
 /**
  * Read model-level compatibility overrides out of untrusted provider config.
  *
@@ -227,6 +343,9 @@ function readCompatEnum<T extends string>(value: unknown, allowed: readonly T[])
  * accepted only at its declared type. A value of the wrong type is dropped rather than
  * forwarded, because pi treats any present field as an explicit override and a truthy
  * string such as `"false"` would otherwise invert the intended behavior.
+ *
+ * `openRouterRouting` is the one object-valued field, so it is validated
+ * structurally by {@link readOpenRouterRouting} rather than key by key here.
  */
 function readModelCompat(value: unknown): LocalModelCompatOverrides | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -242,6 +361,8 @@ function readModelCompat(value: unknown): LocalModelCompatOverrides | undefined 
   if (thinkingFormat) compat.thinkingFormat = thinkingFormat;
   const cacheControlFormat = readCompatEnum(source.cacheControlFormat, CACHE_CONTROL_FORMATS);
   if (cacheControlFormat) compat.cacheControlFormat = cacheControlFormat;
+  const openRouterRouting = readOpenRouterRouting(source.openRouterRouting);
+  if (openRouterRouting) compat.openRouterRouting = openRouterRouting;
   return Object.keys(compat).length > 0 ? compat : undefined;
 }
 
