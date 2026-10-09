@@ -872,7 +872,7 @@ describe("TuiFeatureFlow", () => {
         baseUrl: "https://api.deepseek.com/v1",
         apiKey: "sk-secret",
         apiFormat: "openai-completions",
-        models: template.models,
+        models: [template.models[0]],
         modelId: "deepseek-chat",
         saveAndUse: true,
       },
