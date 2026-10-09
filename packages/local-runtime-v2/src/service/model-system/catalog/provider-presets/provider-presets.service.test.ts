@@ -241,6 +241,49 @@ describe('models.dev Provider Presets', () => {
     expect(presets.map((preset) => preset.providerId)).toEqual(['compatible']);
   });
 
+  it('maps OpenRouter onto Chat Completions without admitting other OpenRouter SDK providers', async () => {
+    const presets = await parsePresetsForTest({
+      openrouter: {
+        name: 'OpenRouter',
+        npm: '@openrouter/ai-sdk-provider',
+        api: 'https://openrouter.ai/api/v1',
+        models: {
+          'xiaomi/mimo-v2.6-pro': {
+            name: 'MiMo-V2.6-Pro',
+            tool_call: true,
+            reasoning: true,
+          },
+          'text-only': { name: 'Text only', tool_call: false },
+        },
+      },
+      standardcompute: {
+        name: 'Standard Compute',
+        npm: '@openrouter/ai-sdk-provider',
+        api: 'https://api.stdcmpt.com/v1',
+        models: { model: { name: 'Model', tool_call: true } },
+      },
+    });
+
+    expect(
+      presets.map(({ providerId, baseUrl, apiFormat, models }) => ({
+        providerId,
+        baseUrl,
+        apiFormat,
+        modelIds: models.map((model) => model.modelId),
+      })),
+    ).toEqual([
+      {
+        providerId: 'openrouter',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        apiFormat: 'openai-completions',
+        modelIds: ['xiaomi/mimo-v2.6-pro'],
+      },
+    ]);
+    expect(providerCompletionUrl('openai-completions', presets[0]!.baseUrl)).toBe(
+      'https://openrouter.ai/api/v1/chat/completions',
+    );
+  });
+
   it('maps the three supported transports and normalizes their request bases', async () => {
     const messagesProviderId = 'anthropic';
     const presets = await parsePresetsForTest({

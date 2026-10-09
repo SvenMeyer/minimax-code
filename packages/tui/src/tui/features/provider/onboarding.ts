@@ -681,6 +681,10 @@ export class TuiProviderOnboarding implements Component, Focusable {
   private saveInput(apiKey: string): McodeSaveProviderCandidateInput | undefined {
     if (this.template) {
       if (!this.selectedModelId) return undefined;
+      // Persist only the chosen model; a catalog such as OpenRouter's would
+      // otherwise copy hundreds of entries into config.yaml.
+      const selected = this.selectedModel();
+      const models = selected ? [selected] : [];
       return {
         ...(this.connection
           ? {
@@ -692,9 +696,7 @@ export class TuiProviderOnboarding implements Component, Focusable {
         baseUrl: this.presetBaseUrl || this.connection?.baseUrl || this.template.baseUrl,
         ...(apiKey ? { apiKey } : {}),
         apiFormat: this.template.apiFormat,
-        models: this.connection
-          ? additiveProviderModels(this.connection, this.template.models)
-          : this.template.models,
+        models: this.connection ? additiveProviderModels(this.connection, models) : models,
         modelId: this.selectedModelId,
         saveAndUse: true,
       };
