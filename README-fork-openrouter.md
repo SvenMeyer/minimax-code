@@ -558,21 +558,27 @@ enough to go read that code.
 
 ## Notes on the update script
 
-Four bugs, all found the hard way, plus two open problems found during the 0.7.2 rebase. Keep them
-in mind before "simplifying" any away.
+Six bugs, all found the hard way. Keep them in mind before "simplifying" any away. The last two
+were found during the 0.7.2 rebase (2026-11-01) and fixed the same day; a sandbox run from the
+pre-rebase state produced the same code tree as the manual rebase.
 
-**Open: a rewritten release commit breaks `git rebase <target>`.** The `v0.6.5` tag (`309e285`) is
-not an ancestor of `v0.7.2`. Upstream's history holds a different 0.6.5 release commit (`b26f634`).
-`git rebase v0.7.2` therefore replays `309e285` as if it were ours, and it conflicts in both
-`package.json` files. The fix is to rebase only the carried commits:
-`git rebase --onto <target> <previous base tag>`. The script still uses the plain form.
+**Rebase only the carried commits.** The `v0.6.5` tag (`309e285`) is not an ancestor of `v0.7.2`;
+upstream's history holds a different 0.6.5 release commit (`b26f634`, same tree). A plain
+`git rebase v0.7.2` replayed `309e285` as if it were ours, and it conflicted in both
+`package.json` files. The script now takes the carried commits to be those no upstream tag or
+`upstream/*` branch contains, and runs `git rebase --onto <target> <parent of the oldest one>`.
+For the same reason fork `main` on `309e285` looked like unique work to `git cherry` (its parent
+was rewritten too, so the patch-id differs). A commit an upstream tag still points at now counts
+as upstream's, so `main` is reset instead of left behind. A local `v*` tag on the patch branch would
+hide carried commits from this rule; don't create one.
 
-**Open: Node 25+ no longer ships `corepack`.** The build step runs `corepack "$spec" install` and
-`corepack "$spec" build`, which fails with `command not found` on Node 26. The `pnpm` on `PATH` is
-already the pinned 9.12.0, so `pnpm install --frozen-lockfile` and `pnpm build` work. The script
-also refuses to run while `.claude/` is untracked in the clone, because `git status --porcelain`
-lists it. For the same reason `pnpm verify` fails `check:source` in the clone; run it from a clean
-`git worktree` instead.
+**Node 25+ no longer ships `corepack`.** The build step ran `corepack "$spec" install`, which fails
+with `command not found` on Node 26. It now falls back to the `pnpm` on `PATH`, but only when its
+version is exactly the pinned `packageManager` version, and stops otherwise. The tracked-changes
+check also ignores untracked files now, so a local `.claude/` no longer blocks a run (git refuses
+by itself if an untracked file would be overwritten). `pnpm verify` still fails `check:source` in
+the clone while `.claude/` exists, because the inventory scans untracked files; run it from a
+clean `git worktree` instead.
 
 **Never force-push the patch branch someone else may have touched.** The script fetched, then
 force-pushed with `--force-with-lease=<branch>:<freshly-fetched-tip>`. Because the lease value was
