@@ -1505,20 +1505,12 @@ describe('LocalModelResolver custom provider compat overrides', () => {
     'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
     'https://example-workspace.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1',
   ])('honors an explicit developer-role override on %s', async (baseURL) => {
-    expect(
-      await systemPromptRoleFor(
-        { supportsDeveloperRole: true },
-        baseURL,
-      ),
-    ).toBe('developer');
+    expect(await systemPromptRoleFor({ supportsDeveloperRole: true }, baseURL)).toBe('developer');
   });
 
   it('honors an explicit developer-role override on a Kimi Coding endpoint', async () => {
     expect(
-      await systemPromptRoleFor(
-        { supportsDeveloperRole: true },
-        'https://api.kimi.com/coding/v1',
-      ),
+      await systemPromptRoleFor({ supportsDeveloperRole: true }, 'https://api.kimi.com/coding/v1'),
     ).toBe('developer');
   });
 });
@@ -1539,10 +1531,7 @@ describe('LocalModelResolver custom provider session affinity', () => {
     );
   };
 
-  const requestFor = async (
-    compat: LocalModelConfig['compat'],
-    cacheRetention?: 'none',
-  ) => {
+  const requestFor = async (compat: LocalModelConfig['compat'], cacheRetention?: 'none') => {
     const modelConfig: LocalModelConfig = compat ? { compat } : {};
     const resolver = new LocalModelResolver({
       byokConfigGetter: () => ({
@@ -1608,6 +1597,140 @@ describe('LocalModelResolver custom provider session affinity', () => {
     const { headers } = await requestFor({ sendSessionAffinityHeaders: true }, 'none');
 
     expect(headers['x-session-affinity']).toBeUndefined();
+  });
+
+  // The routing readers exist to get a value onto the wire, so these pin the
+  // request pi would actually send rather than the resolved compat in between.
+  // Without them a regression after readModelCompat() would leave every reader
+  // test green while BYOK routing is still omitted from the request.
+  const routingPayloadFor = async (input: {
+    providerKey: string;
+    baseURL: string;
+    modelId: string;
+    compat: LocalModelConfig['compat'];
+  }) => {
+    const modelConfig: LocalModelConfig = input.compat ? { compat: input.compat } : {};
+    const resolver = new LocalModelResolver({
+      byokConfigGetter: () => ({
+        custom_provider: {
+          [input.providerKey]: {
+            api: 'openai-completions',
+            options: { apiKey: 'route-key', baseURL: input.baseURL },
+            models: { [input.modelId]: modelConfig },
+          },
+        },
+      }),
+    });
+    const resolved = await resolver.resolveModel({
+      sessionId: 'session-routing-wire',
+      turnId: 'turn-routing-wire',
+      agentConfig: {
+        ...AGENT_CONFIG,
+        model: modelRefForModel(`custom_provider:${input.providerKey}`, input.modelId, modelConfig),
+      },
+    });
+
+    let payload: { provider?: unknown; providerOptions?: unknown } | undefined;
+    await streamSimple(
+      resolved.model,
+      {
+        systemPrompt: 'Follow instructions.',
+        messages: [{ role: 'user', content: 'Hi', timestamp: Date.now() }],
+      },
+      {
+        apiKey: 'route-key',
+        onPayload: (params: unknown) => {
+          payload = params as { provider?: unknown; providerOptions?: unknown };
+        },
+        // The payload is captured before transport, so the request never leaves the test.
+        fetch: (() => Promise.reject(new Error('offline'))) as typeof globalThis.fetch,
+      },
+    ).result();
+    // Absence assertions below are only meaningful if a payload was actually
+    // captured: with an uncaptured payload every `toBeUndefined()` on it would
+    // pass for the wrong reason, so fail loudly rather than report green.
+    if (!payload) {
+      throw new Error('onPayload captured nothing; an absence assertion would be vacuous.');
+    }
+    return payload;
+  };
+
+  const providerRoutingFor = async (compat: LocalModelConfig['compat']) =>
+    (
+      await routingPayloadFor({
+        providerKey: 'openrouter',
+        baseURL: 'https://openrouter.ai/api/v1',
+        modelId: 'deepseek/deepseek-v4.1-flash',
+        compat,
+      })
+    ).provider;
+
+  const vercelRoutingFor = async (
+    compat: LocalModelConfig['compat'],
+    baseURL = 'https://ai-gateway.vercel.sh/v1',
+  ) =>
+    routingPayloadFor({
+      providerKey: 'vercel',
+      baseURL,
+      modelId: 'anthropic/claude',
+      compat,
+    });
+
+  it('sends OpenRouter routing preferences as the request provider field', async () => {
+    expect(
+      await providerRoutingFor({
+        openRouterRouting: { only: ['DeepSeek'], allow_fallbacks: false },
+      }),
+    ).toEqual({ only: ['DeepSeek'], allow_fallbacks: false });
+  });
+
+  it('omits the provider field when no OpenRouter routing is configured', async () => {
+    expect(await providerRoutingFor(undefined)).toBeUndefined();
+    expect(await providerRoutingFor({ supportsStrictMode: false })).toBeUndefined();
+  });
+
+  // The Vercel keys take a different route: the transport gates them on the base
+  // URL and builds `providerOptions.gateway`, so this pins that separate path.
+  it('sends Vercel gateway routing as providerOptions.gateway', async () => {
+    const payload = await vercelRoutingFor({
+      vercelGatewayRouting: { only: ['bedrock', 'anthropic'], order: ['anthropic'] },
+    });
+
+    expect(payload.providerOptions).toEqual({
+      gateway: { only: ['bedrock', 'anthropic'], order: ['anthropic'] },
+    });
+    // The OpenRouter field is not a Vercel field, and must stay out of it.
+    expect(payload.provider).toBeUndefined();
+  });
+
+  it('does not send Vercel gateway options off the Vercel host', async () => {
+    // The transport gates on the base URL, so the same config is inert elsewhere.
+    const payload = await vercelRoutingFor(
+      { vercelGatewayRouting: { only: ['bedrock'] } },
+      'https://gateway.example/v1',
+    );
+
+    expect(payload.providerOptions).toBeUndefined();
+  });
+
+  it('omits providerOptions.gateway when no Vercel routing is configured', async () => {
+    const payload = await vercelRoutingFor(undefined);
+
+    expect(payload.providerOptions).toBeUndefined();
+  });
+
+  it('sends Vercel gateway options for a mixed-case host', async () => {
+    // The transport's endpoint check is case-sensitive, so a host the reader
+    // approved must actually reach the wire in the form the transport matches.
+    // Without host folding this asserted nothing: the reader said yes and the
+    // request silently carried no gateway options.
+    const payload = await vercelRoutingFor(
+      { vercelGatewayRouting: { only: ['bedrock'] } },
+      'https://AI-GATEWAY.VERCEL.SH/v1',
+    );
+
+    expect(payload.providerOptions).toEqual({ gateway: { only: ['bedrock'] } });
+    expect(payload.provider).toBeUndefined();
   });
 });
 

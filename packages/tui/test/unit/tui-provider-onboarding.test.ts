@@ -143,7 +143,7 @@ describe("TuiProviderOnboarding", () => {
       baseUrl: "https://api.deepseek.com/v1",
       apiKey: "sk-super-secret",
       apiFormat: "openai-completions",
-      models: knownTemplate.models,
+      models: [knownTemplate.models[0]],
       modelId: "deepseek-chat",
       saveAndUse: true,
     });
@@ -415,14 +415,34 @@ describe("existing connection onboarding", () => {
       apiFormat: knownTemplate.apiFormat,
       saveAndUse: true,
       modelId: "deepseek-chat",
-      models: [
-        { modelId: "deepseek-chat" },
-        { modelId: "private-model" },
-        knownTemplate.models[1],
-      ],
+      models: [{ modelId: "deepseek-chat" }, { modelId: "private-model" }],
     });
     expect(onComplete).toHaveBeenCalledWith(
       expect.objectContaining({ reused: true }),
+    );
+  });
+
+  it("adds only the newly chosen catalog model to an existing connection", async () => {
+    const onSave = vi.fn(async () => ({ success: true }));
+    const onboarding = new TuiProviderOnboarding({
+      templates: [knownTemplate],
+      providers: [{ ...savedConnection, models: [{ modelId: "private-model" }] }],
+      onSave,
+      onComplete: vi.fn(),
+      onCancel: vi.fn(),
+      requestRender: vi.fn(),
+    });
+    onboarding.handleInput("\r");
+    onboarding.handleInput("\r");
+    onboarding.handleInput("\u001b[B");
+    onboarding.handleInput("\r");
+    onboarding.handleInput("\r");
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelId: "deepseek-reasoner",
+        models: [{ modelId: "private-model" }, knownTemplate.models[1]],
+      }),
     );
   });
 
