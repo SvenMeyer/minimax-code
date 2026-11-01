@@ -69,11 +69,13 @@ routing keys, and `saveInput()` still sends the whole catalog. The 0.6.5-based h
 
 ### Outstanding
 
-- **Upstream comments posted, nothing further planned.**
+- **Upstream comments posted; awaiting the maintainers.**
   - **#288** — [the offer](https://github.com/MiniMax-AI/minimax-code/issues/288#issuecomment-5870900552),
     [the claim correction](https://github.com/MiniMax-AI/minimax-code/issues/288#issuecomment-5870917324),
     [the `vercelGatewayRouting` completion](https://github.com/MiniMax-AI/minimax-code/issues/288#issuecomment-5871123931).
-    @Ralle1976 has claimed the work; awaiting maintainers. **No further action** — see below.
+    @Ralle1976 [released the claim](https://github.com/MiniMax-AI/minimax-code/issues/288#issuecomment-5879846458)
+    on 2026-09-28 after reviewing this branch ("no competing implementation"), so no one else is
+    working on it.
   - **#289** — [item 1 raised separately](https://github.com/MiniMax-AI/minimax-code/issues/289#issuecomment-5871122391),
     offering `2653f44` against the triage's own invitation ("PRs welcome, especially for the transport
     mapping"). This is the standalone raise; it was never only a mention inside the #288 comment.
@@ -83,6 +85,10 @@ routing keys, and `saveInput()` still sends the whole catalog. The 0.6.5-based h
   - **2026-10-09, after 0.6.5** — [status + config-size finding + "how do we get this into main?"](https://github.com/MiniMax-AI/minimax-code/issues/289#issuecomment-6074335370).
     Awaiting the maintainers' answer on PR access vs. internal pickup. Still unanswered at the
     0.7.2 release (2026-10-31); both issues still carry `needs-triage`, and no upstream PR covers them.
+  - **2026-11-01, after 0.7.2** — [rebase status, new hashes, diff and `git am` patch, question repeated](https://github.com/MiniMax-AI/minimax-code/issues/289#issuecomment-6552397513)
+    on #289, with a [one-line pointer](https://github.com/MiniMax-AI/minimax-code/issues/288#issuecomment-6552398421)
+    on #288. The patch link is `compare/c6c7f28...34331c9.patch`, the 17 code commits without the
+    fork-notes commits. Wait for an answer before posting again.
 
 ### config.yaml size
 
@@ -109,10 +115,12 @@ without that risk — the maintainer's call, not mine to make by default.
 
 ### Read the whole thread before posting to it
 
-**Status: no further action planned on #288** (decision 2026-09-29). The offer, the correction and the
-`vercelGatewayRouting` completion are all posted; @Ralle1976 has claimed the work and the maintainers
-have not responded. Nothing more is to be added unless they ask — do not re-post, do not re-offer, and
-do not chase. This note exists so the reasoning survives if the thread is revisited later.
+**Status on #288:** the offer, the correction and the `vercelGatewayRouting` completion were posted
+2026-09-28, and the 2026-09-29 decision was to add nothing more. That note wrongly said @Ralle1976
+still held the claim: their release came the same evening, and this note missed it, which is the
+trap described below happening a second time. After 0.7.2 the follow-up went to #289, where the
+open question lives, with only a pointer on #288. This note exists so the reasoning survives if the
+thread is revisited later.
 
 The first upstream comment was written, and posted, **without reading the comments between ours and
 the present day**. That was a mistake, and only after posting did the full thread show:
